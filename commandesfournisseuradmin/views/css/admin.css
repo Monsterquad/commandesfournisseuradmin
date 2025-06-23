@@ -1,0 +1,7 @@
+#passer_commande_fournisseur_modal .modal-body {
+    height: 600px;
+}
+
+#passer_commande_fournisseur_modal .modal-body textarea {
+    height: 200px;
+}
