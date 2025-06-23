@@ -1,13 +1,8 @@
 <?php
-
-//declare(strict_types=1);
 /*
  * Commandes fournisseur en admin
  * Permet de faire des mails de commande fournisseur a partir des commandes d'admin.
- *
- * Note : les templates d'admin ne sont plus mis en override.
- * Car utilisés par plusieurs modules.
- * Overrride à faire à la main.
+ * Version adaptée pour PrestaShop 8.2
  *
  * @author  contact@seb7.fr
  */
@@ -17,89 +12,40 @@ if (!defined('_PS_VERSION_')) {
 
 class Commandesfournisseuradmin extends Module
 {
-    const ADMIN_FILES = [
-        'controllers/admin/templates/orders/helpers/view/view.tpl',
-        'controllers/admin/templates/orders/_product_line.tpl',
-    ];
-
-    /** @phpstan-ignore-next-line */
     public function __construct()
     {
         $this->name = 'commandesfournisseuradmin';
         $this->tab = 'shipping_logistics';
         $this->need_instance = 1;
+        $this->ps_versions_compliancy = ['min' => '8.0', 'max' => '8.2.99'];
+
+        parent::__construct();
 
         $this->displayName = $this->l('Demandes de délai fournisseur en admin');
-
         $this->description = $this->l('Permet de faire des mails de demande de délai au fournisseur a partir des commandes d admin.');
 
-        $this->version = '1.2.0';
+        $this->version = '2.0.0'; // Version PS 8.2
         $this->author = 'sebastien monterisi';
         $this->author_uri = 'https://prestashop.seb7.fr';
 
-        $this->dependencies = ['champmailfournisseurs'];
-        parent::__construct();
+        // Suppression de la dépendance car plus compatible PS 8.2
+        // $this->dependencies = ['champmailfournisseurs'];
     }
 
     public function install(): bool
     {
         try {
             return parent::install()
-//                && $this->installAdminTemplates() // juste pendant le dev, plus pratique.
                 && $this->registerHook('displayBackOfficeHeader')
-                && $this->registerHook('actionMailAlterMessageBeforeSend')
-                && $this->registerHook('adminOrdersControllerGetProducts')
+                && $this->registerHook('displayAdminOrder')
                 && $this->installDb();
         } catch (\Exception $exception) {
             $message = "Impossible d'installer le module {$this->name} : " . $exception->getMessage();
-            Logger::AddLog($message);
+            PrestaShopLogger::AddLog($message);
             $this->_errors[] = $message;
 
             return false;
         }
-    }
-
-    /**
-     * @param array{products: array<string, mixed>} $params
-     * @return array{products: array<string, mixed>}
-     */
-    public function hookAdminOrdersControllerGetProducts(array &$params): array
-    {
-        try {
-            $references = array_map(function ($product) {
-                $ref = pSQL($product['reference']);
-
-                return "'$ref'";
-            }, $params['products']);
-
-            if (empty($references)) {
-                return $params;
-            }
-
-            $query = new DbQuery();
-            $query->from('commandes_fournisseurs')
-                ->select('MAX(date) as date, reference')
-                ->where(sprintf('reference IN(%s)', implode(',', $references)))
-                ->groupBy('reference');
-            $dates_commandes = Db::getInstance()->executeS($query);
-
-            if (false === $dates_commandes) {
-                throw new Exception(__FILE__ . ' : Erreur requete sql : ' . $query->build());
-            }
-            // references ajoutés en clés
-            $dates_commandes = array_column($dates_commandes, 'date', 'reference');
-
-            // date de commandes ajoutées au 'product'
-            $params['products'] = array_map(function ($product) use ($dates_commandes) {
-                $product['date_commande_fournisseur'] = $dates_commandes[$product['reference']] ?? '';
-
-                return $product;
-            }, $params['products']);
-        } catch (Exception $exception) {
-            PrestaShopLogger::AddLog($exception->getMessage());
-        }
-
-        return $params;
     }
 
     public function uninstall(): bool
@@ -111,6 +57,7 @@ class Commandesfournisseuradmin extends Module
     {
         if (Context::getContext()->controller instanceof AdminOrdersController) {
             Context::getContext()->controller->addCSS($this->_path . 'views/css/admin.css');
+            Context::getContext()->controller->addJS($this->_path . 'js/commandes-fournisseurs.js');
 
             $url = Context::getContext()->link->getAdminLink('AdminOrders');
 
@@ -121,138 +68,236 @@ class Commandesfournisseuradmin extends Module
     }
 
     /**
-     * Lance la copie des vues modifiés pour l'admin
-     *
-     * @return bool
-     *
-     * @throws Exception
+     * Hook pour l'affichage dans les commandes - Version PS 8.2
      */
-    private function installAdminTemplates()
+    public function hookDisplayAdminOrder(array $params): string
     {
-        return array_reduce(self::ADMIN_FILES, function ($r, $file) {
-            return $r && $this->installAdminTemplate($file);
-        }, true);
+        $id_order = (int) $params['id_order'];
+        $order = new Order($id_order);
+        $order_details = $order->getOrderDetailList();
+
+        // Récupérer les dates de commandes fournisseurs
+        $dates_commandes = $this->getSupplierOrderDates($order_details);
+
+        // Injecter le HTML et JavaScript pour ajouter les cases à cocher et le bouton
+        return $this->generateOrderInterface($order, $order_details, $dates_commandes);
     }
 
     /**
-     * Copie d'une vue d'admin
-     *
-     * @param string $fichier
-     *
-     * @return bool
+     * Traite les appels AJAX
      */
-    private function installAdminTemplate($fichier)
+    public function getAjaxResponse()
     {
-        $file = $this->getFileInfos($fichier);
-
-        // --- verifications ---
-        // fichier source n'existe pas
-        if (!file_exists($file->sourceFile)) {
-            throw new Exception('Mauvaise définition interne. Fichier source inexistant. ' . $file->sourceFile);
+        if (!Tools::getValue('ajax') || !Context::getContext()->employee) {
+            return false;
         }
 
-        // fichier final existe
-//        if (file_exists($file->destinationFile))
-//        {
-//            throw new Exception('Template admin déjà overidé. ' . $file->destinationFile);
-//        }
+        $action = Tools::getValue('action');
 
-        // création dossier destination si necessaire
-        if (!is_dir($file->destinationDir)) {
-            if (!@mkdir($file->destinationDir, 0755, true)) {
-                throw new Exception('Impossible de créer le dossier ' . $file->destinationDir);
+        try {
+            switch ($action) {
+                case 'mailcontents':
+                    $this->handleMailContents();
+                    break;
+                case 'envoimail':
+                    $this->handleSendMail();
+                    break;
             }
+        } catch (Exception $e) {
+            $this->ajaxResponse(['erreur' => $e->getMessage()]);
+        }
+    }
+
+    private function handleMailContents()
+    {
+        $products = json_decode(Tools::getValue('products'), true);
+        $order_ref = Tools::getValue('order_ref');
+
+        if (!$order_ref) {
+            $this->ajaxResponse(['erreur' => 'Pas de reference de commande.']);
+            return;
         }
 
-        // verification ecriture dossier destination
-        if (!is_writable($file->destinationDir)) {
-            throw new Exception('Le dossier ' . $file->destinationDir . ' n est pas accessible en écriture.');
+        if (empty($products)) {
+            $this->ajaxResponse(['erreur' => 'Pas de produit selectionnés']);
+            return;
         }
 
-        // --- action ---
+        $content = $this->getTemplateContents($products, $order_ref);
+        $this->ajaxResponse(['content' => $content, 'erreur' => '']);
+    }
 
-        // verif qui n'a pas sens ici
-//        if(!strpos('view', $file->sourceFile))
-//        {
-//            throw new \Exception("accepte uniquement la copie des viewxxx {$file->sourceFile} -> {$file->destinationFile} ");
-//        }
+    private function handleSendMail()
+    {
+        $email_destinataire = Tools::getValue('destinataire');
+        $contenu_mail = Tools::getValue('contenu_mail');
+        $id_mail = Tools::getValue('id_mail');
+        $products = json_decode(Tools::getValue('products'), true);
+        $id_supplier = (int) Tools::getValue('id_supplier');
+        $order_ref = Tools::getValue('order_ref');
 
-        if (!copy($file->sourceFile, $file->destinationFile)) {
-            throw new \Exception("Echec copie {$file->sourceFile} -> {$file->destinationFile}");
+        if (is_null($products)) {
+            throw new Exception('envoimail : Pas de produits dans le decodage json');
         }
 
-        return true;
+        if (!$order_ref) {
+            throw new Exception('envoimail : Pas de reference de commande.');
+        }
+
+        $this->sendMailToSupplier($email_destinataire, nl2br($contenu_mail), $order_ref);
+        $this->recordSentMail($id_supplier, $products);
+
+        $this->ajaxResponse(['content' => 'ok', 'id_mail' => $id_mail, 'erreur' => '']);
+    }
+
+    private function ajaxResponse($data)
+    {
+        header('Content-Type: application/json');
+        echo json_encode($data);
+        exit;
     }
 
     /**
-     * Objet fichier a copier avec caractéritiques du fichiers
-     *
-     * @param string $file
-     *
-     * @return stdClass (sourceFile, sourceDir, destinationFile, destinationDir)
+     * Génère l'interface pour les commandes (cases à cocher + bouton + modal)
      */
-    private function getFileInfos($file)
+    private function generateOrderInterface($order, $order_details, $dates_commandes): string
     {
-        $path_parts = pathinfo($file);
-
-        $_dir = $path_parts['dirname'] . '/';
-        if (strpos($_dir, '/') === 0) { // sup premier slash si existe
-            $_dir = substr($_dir, 1);
+        $html = '<script type="text/javascript">
+        document.addEventListener("DOMContentLoaded", function() {
+            // Ajouter les cases à cocher dans le tableau des produits
+            var productTable = document.querySelector("#orderProducts, table");
+            if (!productTable) return;
+            
+            var headerRow = productTable.querySelector("thead tr");
+            if (headerRow && !headerRow.querySelector(".mq-supplier-header")) {
+                var newHeader = document.createElement("th");
+                newHeader.className = "mq-supplier-header";
+                newHeader.textContent = "Demande délai";
+                headerRow.insertBefore(newHeader, headerRow.firstChild);
+            }
+            
+            var productRows = productTable.querySelectorAll("tbody tr");
+            var productData = ' . json_encode($this->prepareProductData($order_details, $dates_commandes)) . ';
+            
+            productRows.forEach(function(row, index) {
+                if (productData[index] && !row.querySelector(".mq-supplier-checkbox")) {
+                    var newCell = document.createElement("td");
+                    newCell.className = "mq-supplier-checkbox";
+                    
+                    var product = productData[index];
+                    var checkbox = document.createElement("input");
+                    checkbox.type = "checkbox";
+                    checkbox.name = "mail_fournisseur[" + product.id_product + (product.id_product_attribute ? "_" + product.id_product_attribute : "") + "]";
+                    checkbox.dataset.id_product = product.id_product;
+                    checkbox.dataset.id_product_attribute = product.id_product_attribute || "0";
+                    checkbox.dataset.reference = product.reference || "";
+                    checkbox.dataset.order_ref = "' . $order->reference . '";
+                    checkbox.title = "Cocher pour inclure dans la demande de délai";
+                    
+                    newCell.appendChild(checkbox);
+                    row.insertBefore(newCell, row.firstChild);
+                }
+            });
+            
+            // Ajouter le bouton et la modal
+            addSupplierOrderButton();
+        });
+        
+        function addSupplierOrderButton() {
+            var actionsDiv = document.querySelector(".order_action, .well");
+            if (!actionsDiv || document.getElementById("passer_commande_fournisseur")) return;
+            
+            var buttonHtml = `
+                <button id="passer_commande_fournisseur" class="btn btn-default" type="button"
+                        data-toggle="modal" data-target="#passer_commande_fournisseur_modal">
+                    <i class="icon-envelope-o"></i>
+                    Faire une demande de délai
+                </button>
+                
+                <div class="modal fade" id="passer_commande_fournisseur_modal" tabindex="-1" role="dialog">
+                    <div class="modal-dialog" role="document">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Mail fournisseur</h5>
+                                <button type="button" class="close" data-dismiss="modal">
+                                    <span>&times;</span>
+                                </button>
+                            </div>
+                            <div class="modal-body">
+                                <p>Patienter ...</p>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-primary" data-dismiss="modal">Terminé</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            actionsDiv.insertAdjacentHTML("beforeend", buttonHtml);
         }
-        $_file = $path_parts['basename'];
+        </script>';
 
-        // destination
-        $_destination_dir = _PS_OVERRIDE_DIR_ . $_dir;
-        $_destination_file = $_destination_dir . $_file;
+        return $html;
+    }
 
-        // source
-        $_source_dir = $this->getLocalPath() . 'override' . DIRECTORY_SEPARATOR . $_dir;
-        $_source_file = $_source_dir . $_file;
+    /**
+     * Prépare les données des produits pour JavaScript
+     */
+    private function prepareProductData($order_details, $dates_commandes): array
+    {
+        $data = [];
+        foreach ($order_details as $detail) {
+            $data[] = [
+                'id_product' => $detail['product_id'],
+                'id_product_attribute' => $detail['product_attribute_id'] ?? 0,
+                'reference' => $detail['product_reference'] ?? '',
+                'date_commande_fournisseur' => $dates_commandes[$detail['product_reference']] ?? ''
+            ];
+        }
+        return $data;
+    }
 
-        // assemblage dans un classe
-        $return = new stdClass();
-        $return->sourceFile = $_source_file;
-        $return->sourceDir = $_source_dir;
-        $return->destinationFile = $_destination_file;
-        $return->destinationDir = $_destination_dir;
+    /**
+     * Récupère les dates de commandes fournisseurs
+     */
+    private function getSupplierOrderDates($order_details): array
+    {
+        $references = array_map(function ($detail) {
+            return "'" . pSQL($detail['product_reference']) . "'";
+        }, $order_details);
 
-        return $return;
+        if (empty($references)) {
+            return [];
+        }
+
+        $query = new DbQuery();
+        $query->from('commandes_fournisseurs')
+            ->select('MAX(date) as date, reference')
+            ->where(sprintf('reference IN(%s)', implode(',', $references)))
+            ->groupBy('reference');
+
+        $dates_commandes = Db::getInstance()->executeS($query);
+
+        if (false === $dates_commandes) {
+            return [];
+        }
+
+        return array_column($dates_commandes, 'date', 'reference');
     }
 
     /**
      * Contenu des mails à envoyer aux fournisseurs.
-     *
-     * @param array $products
-     * @param string $order_ref
-     *
-     * @return array<int, array<string, array>>
-     *
-     * @todo completer le return type
-     *
-     *               [ <id_supplier> => [
-     *               "products" => [
-     *               0 => [
-     *               "name" => "ROTULE TRIANGLE INFERIEUR"
-     *               "reference" => "SC-42150-MAX-00"
-     *               "id_supplier" => "4"
-     *               ]
-     *               1 => [...] ],
-     *               "supplier" => [
-     *               "name" => "DELTAMICS",
-     *               "mail" => "me@deltamics.fr",
-     *               "id_supplier" => 4,
-     *               ],
-     *               "mail" => "  Bonjour, ..."
-     *               ],
-     *               "order" => ["ref"],
-     *
-     * @throws Exception
      */
     public function getTemplateContents(array $products, string $order_ref): array
     {
         $grouped_by_supplier = [];
         foreach ($products as $product_array) {
-            $product_infos = $this->getProductInfos((int) $product_array['id_product'], (int) $product_array['id_product_attribute'], $product_array['reference']);
+            $product_infos = $this->getProductInfos(
+                (int) $product_array['id_product'],
+                (int) $product_array['id_product_attribute'],
+                $product_array['reference']
+            );
 
             $grouped_by_supplier[$product_infos['id_supplier']]['products'][] = $product_infos;
             if (!isset($grouped_by_supplier[$product_infos['id_supplier']]['supplier'])) {
@@ -266,27 +311,9 @@ class Commandesfournisseuradmin extends Module
             $supplier_products['order']['ref'] = $order_ref;
         });
 
-        // array_values pour simplifier la structure du json
         return array_values($grouped_by_supplier);
     }
 
-    /**
-     * Infos sur le produit
-     *
-     * On peut fonctionner avec une requete par produit, il y a peu de produits concernés à chaque fois.
-     *
-     * @param int $id_product
-     * @param int $id_product_attribute
-     * @param string|null $reference
-     *
-     * @todo le parser du ModuleDataProvider doit verifier si c'est du php70 et donc le ?$reference n'est pas toléré.
-     * en enlevant le typage ça passe.
-     * Le reste de la fonction est tout de même à revoir, on fait une requete sql avec $reference qui est null.
-     *
-     * @return mixed
-     *
-     * @throws Exception
-     */
     private function getProductInfos(int $id_product, int $id_product_attribute, $reference = null)
     {
         $query = new DbQuery();
@@ -294,7 +321,8 @@ class Commandesfournisseuradmin extends Module
             $query->from('product', 'p')
                 ->select('pl.name, p.reference, p.id_product, pa.id_product_attribute, p.id_supplier')
                 ->leftJoin('product_lang', 'pl', 'p.id_product=pl.id_product')
-                ->leftJoin('product_attribute', 'pa', sprintf('p.id_product=pa.id_product AND pa.id_product_attribute=%s', $id_product_attribute))->where(sprintf('p.id_product=%d', $id_product))
+                ->leftJoin('product_attribute', 'pa', sprintf('p.id_product=pa.id_product AND pa.id_product_attribute=%s', $id_product_attribute))
+                ->where(sprintf('p.id_product=%d', $id_product))
                 ->where(sprintf('pa.id_product_attribute=%d', $id_product_attribute))
                 ->where(sprintf("p.reference='%s'", pSQL($reference)));
         } else {
@@ -311,13 +339,6 @@ class Commandesfournisseuradmin extends Module
         throw new Exception('Erreurs sql : ' . $query->build() . ' : ' . Db::getInstance()->getMsgError());
     }
 
-    /**
-     * Infos sur un fournisseurs
-     *
-     * @return array ['name', 'mail', 'id_supplier']
-     *
-     * @throws Exception
-     */
     private function getSupplierInfos(int $id_supplier): array
     {
         if (0 === $id_supplier) {
@@ -339,51 +360,59 @@ class Commandesfournisseuradmin extends Module
     private function getMailContent(array $products)
     {
         Context::getContext()->smarty->assign(compact('products'));
-
         return Context::getContext()->smarty->fetch(__DIR__ . '/views/mail.tpl');
     }
 
-    /**
-     * Adresse de l'expéditeur.
-     * Correspond au mail indiqué dans le cahier des charges. <service-client@monsterquad.fr>
-     */
     public function getMailSenderAddress(): string
     {
         return Configuration::get('PS_SHOP_EMAIL');
     }
 
-    /**
-     * Supprime le nom du site du sujet.
-     *
-     * @param array $params
-     */
-    public function hookActionMailAlterMessageBeforeSend(array &$params)
-    {
-//        Logger::AddLog(__FUNCTION__ . $params['message'] . ' ' . uniqid());
-        /**
-         * @var Swift_Message $message
-         */
-        $message = $params['message'];
-        $subject = $message->getSubject();
-        $idShop = Context::getContext()->shop->id ?? 1;
-        $to_replace = '%' . preg_quote('[' . Configuration::get('PS_SHOP_NAME', null, null, $idShop) . '] ') . '%';
-        $subject = trim(preg_replace($to_replace, '', $subject));
-
-        $message->setSubject($subject);
-
-//        Logger::AddLog(__FUNCTION__ . $message . ' ' . uniqid());
-
-        $params['message'] = $message;
-    }
-
-    /**
-     * Même remarque que la fonction précédente.
-     * Pas de nom d'expéditeur finalement.
-     */
     public function getMailSenderName(): string
     {
         return '';
-//        return Configuration::get('PS_SHOP_NAME');
+    }
+
+    private function sendMailToSupplier(string $email_destinataire, string $contenu_mail, string $order_ref): bool
+    {
+        $logo = Configuration::get('PS_LOGO_MAIL') ? _PS_IMG_DIR_ . Configuration::get('PS_LOGO_MAIL') : '';
+        $shop_url = Context::getContext()->link->getPageLink('index', true);
+
+        return (bool) Mail::send(
+            Context::getContext()->language->id,
+            'commande',
+            "[$order_ref] " . $this->l('Demande de Délai'),
+            [
+                '{content}' => $contenu_mail,
+                '{shop_name}' => Configuration::get('PS_SHOP_NAME'),
+                '{shop_logo}' => $logo,
+                '{shop_url}' => $shop_url,
+            ],
+            $email_destinataire,
+            null,
+            $this->getMailSenderAddress(),
+            $this->getMailSenderName(),
+            null,
+            null,
+            _PS_ROOT_DIR_ . _MODULE_DIR_ . 'commandesfournisseuradmin/mails/fr'
+        );
+    }
+
+    public function recordSentMail(int $id_supplier, array $products): void
+    {
+        $values = array_map(function ($product) {
+            return "('" . pSQL($product['reference']) . "' , {$product['id_product']} , {$product['id_product_attribute']}, NOW() ) ";
+        }, $products);
+
+        $sql = sprintf(
+            'INSERT INTO %scommandes_fournisseurs (`reference`, `id_product`, `id_product_attribute`, `date`) VALUES %s',
+            _DB_PREFIX_,
+            implode(',', $values)
+        );
+
+        if (!Db::getInstance()->execute($sql)) {
+            throw new Exception("Module {$this->name} : erreur requete sql : $sql");
+        }
     }
 
     private function installDb(): bool
@@ -391,10 +420,9 @@ class Commandesfournisseuradmin extends Module
         try {
             $this->processSqlFile(__DIR__ . '/sql/install.sql');
         } catch (\Exception $exception) {
-            // log erreur et stockage dans erreurs du module
             $error_message = 'commandesfournisseuradmin ' . $exception->getMessage();
-            Logger::AddLog($error_message);
-            $_errors[] = $error_message;
+            PrestaShopLogger::AddLog($error_message);
+            $this->_errors[] = $error_message;
 
             return false;
         }
@@ -407,41 +435,29 @@ class Commandesfournisseuradmin extends Module
         return $this->processSqlFile(__DIR__ . '/sql/uninstall.sql');
     }
 
-    private function processSqlFile(string $path): bool
-    {
-        $queries = file_get_contents($path);
-        if (!$queries) {
-            throw new Exception("Impossible de charger le fichier sql $path");
-        }
-
-        $queries = str_replace('{prefix}', _DB_PREFIX_, $queries);
-
-        if (!Db::getInstance()->execute($queries)) {
-            throw new Exception('Erreur execution sql : ' . Db::getInstance()->getMsgError());
-        }
-
-        return true;
+   private function processSqlFile(string $path): bool
+{
+    $sql_content = file_get_contents($path);
+    if (!$sql_content) {
+        throw new Exception("Impossible de charger le fichier sql $path");
     }
 
-    /**
-     * Enregistre en base de données que le mail a été envoyée pour les produits.
-     *
-     * @param int $id_supplier
-     * @param array $products
-     *
-     * @throws Exception
-     */
-    public function recordSentMail(int $id_supplier, array $products): void
-    {
-//        throw new \Exception("Pas encore implementé, on va traiter id_product, id_product_attribute et reference (memêe si redondance)."); // @todo Pas encore implementé, on va traiter id_product, id_product_attribute et reference (memêe si redondance).
+    $sql_content = str_replace('{prefix}', _DB_PREFIX_, $sql_content);
 
-        $values = array_map(function ($product) {
-            // (`reference`, `id_product`, `id_product_attribute`, `date`)
-            return "('" . pSQL($product['reference']) . "' , {$product['id_product']} , {$product['id_product_attribute']}, NOW() ) ";
-        }, $products);
-        $sql = sprintf('INSERT INTO %scommandes_fournisseurs (`reference`, `id_product`, `id_product_attribute`, `date`) VALUES %s', _DB_PREFIX_, implode(',', $values));
-        if (!Db::getInstance()->execute($sql)) {
-            throw new Exception("Module {$this->name} : erreur requete sql : $sql");
+    // Séparer les requêtes SQL
+    $queries = explode(';', $sql_content);
+
+    foreach ($queries as $query) {
+        $query = trim($query);
+        if (empty($query)) {
+            continue;
+        }
+
+        if (!Db::getInstance()->execute($query)) {
+            throw new Exception('Erreur execution sql : ' . Db::getInstance()->getMsgError() . ' - Query: ' . $query);
         }
     }
+
+    return true;
+}
 }
