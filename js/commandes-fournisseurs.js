@@ -7,61 +7,85 @@ commandes_fournisseurs = {
   contenu: null,
 
   start: function() {
-    const modal = document.getElementById('passer_commande_fournisseur_modal');
-    if (!modal) return;
-
-    modal.addEventListener('show.bs.modal', function(event) {
-      commandes_fournisseurs.modal = this;
-      commandes_fournisseurs.contenu = this.querySelector('.modal-body');
-
-      // Collecte des produits sélectionnés
-      const checkedInputs = document.querySelectorAll('#orderProducts input[name^="mail_fournisseur"]:checked');
-
-      const products = Array.from(checkedInputs).map(function(input) {
-        return {
-          'id_product': input.dataset.id_product,
-          'id_product_attribute': input.dataset.id_product_attribute,
-          'reference': input.dataset.reference
-        };
-      });
-
-      if (products.length === 0) {
-        commandes_fournisseurs.contenu.innerHTML = 'Aucun produit sélectionné';
+    // Attendre que la modal soit créée par le script inline
+    setTimeout(() => {
+      const modal = document.getElementById('passer_commande_fournisseur_modal');
+      if (!modal) {
+        console.log('Modal not found, retrying...');
+        setTimeout(() => this.start(), 1000);
         return;
       }
 
-      const order_ref = checkedInputs[0].dataset.order_ref;
+      console.log('Modal found, setting up event listeners');
 
-      // Appel AJAX avec fetch (moderne)
-      fetch(commandesfournisseur_action_url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          'products': JSON.stringify(products),
-          'action': 'mailcontents',
-          'order_ref': order_ref
-        })
-      })
-      .then(response => response.json())
-      .then(data => commandes_fournisseurs.drawMails(data))
-      .catch(error => {
-        commandes_fournisseurs.contenu.innerHTML = 'Erreur AJAX: ' + error.message;
-        console.error('Erreur:', error);
+      // Observer pour détecter quand la modal s'ouvre
+      const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
+            if (modal.style.display === 'block') {
+              this.onModalOpen();
+            }
+          }
+        });
       });
+
+      observer.observe(modal, { attributes: true });
+    }, 500);
+  },
+
+  onModalOpen: function() {
+    console.log('Modal opened, processing...');
+
+    this.modal = document.getElementById('passer_commande_fournisseur_modal');
+    this.contenu = this.modal.querySelector('.modal-body');
+
+    // Collecte des produits sélectionnés
+    const checkedInputs = document.querySelectorAll('input[name^="mail_fournisseur"]:checked');
+
+    const products = Array.from(checkedInputs).map(function(input) {
+      return {
+        'id_product': input.dataset.id_product,
+        'id_product_attribute': input.dataset.id_product_attribute,
+        'reference': input.dataset.reference
+      };
+    });
+
+    if (products.length === 0) {
+      this.contenu.innerHTML = 'Aucun produit sélectionné';
+      return;
+    }
+
+    const order_ref = checkedInputs[0].dataset.order_ref;
+
+    // Appel AJAX avec fetch (moderne)
+    fetch(window.commandesfournisseur_action_url || commandesfournisseur_action_url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        'products': JSON.stringify(products),
+        'action': 'mailcontents',
+        'order_ref': order_ref
+      })
+    })
+    .then(response => response.json())
+    .then(data => this.drawMails(data))
+    .catch(error => {
+      this.contenu.innerHTML = 'Erreur AJAX: ' + error.message;
+      console.error('Erreur:', error);
     });
   },
 
   drawMails: function(response) {
-    commandes_fournisseurs.contenu.innerHTML = '';
+    this.contenu.innerHTML = '';
 
     if (response.erreur && response.erreur.length > 0) {
-      commandes_fournisseurs.contenu.innerHTML = 'Erreur : ' + response.erreur;
+      this.contenu.innerHTML = 'Erreur : ' + response.erreur;
       return;
     }
 
-    const draw_a_mail = function(supplier_products) {
+    const draw_a_mail = (supplier_products) => {
       // Création des éléments
       const titre = document.createElement('h4');
       const mailText = supplier_products.supplier.mail || 'MAIL NON RENSEIGNÉ';
@@ -79,7 +103,7 @@ commandes_fournisseurs = {
       bouton_envoi.dataset.id_supplier = supplier_products.supplier.id_supplier;
       bouton_envoi.dataset.products = JSON.stringify(supplier_products.products);
       bouton_envoi.dataset.order_ref = supplier_products.order.ref;
-      bouton_envoi.onclick = commandes_fournisseurs.envoimail;
+      bouton_envoi.onclick = this.envoimail.bind(this);
 
       const contenaire = document.createElement('div');
       contenaire.className = 'mb-4';
@@ -88,11 +112,11 @@ commandes_fournisseurs = {
       contenaire.appendChild(contenu_mail);
       contenaire.appendChild(bouton_envoi);
 
-      commandes_fournisseurs.contenu.appendChild(contenaire);
+      this.contenu.appendChild(contenaire);
     };
 
     // Supprimer les paragraphes existants
-    const paragraphs = commandes_fournisseurs.contenu.querySelectorAll('p');
+    const paragraphs = this.contenu.querySelectorAll('p');
     paragraphs.forEach(p => p.remove());
 
     // Dessiner chaque mail
@@ -110,7 +134,7 @@ commandes_fournisseurs = {
     const parent_div = button.parentElement;
     const textarea = parent_div.querySelector('textarea');
 
-    fetch(commandesfournisseur_action_url, {
+    fetch(window.commandesfournisseur_action_url || commandesfournisseur_action_url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -126,9 +150,9 @@ commandes_fournisseurs = {
       })
     })
     .then(response => response.json())
-    .then(data => commandes_fournisseurs.resultat_envoi_mails(data))
+    .then(data => this.resultat_envoi_mails(data))
     .catch(error => {
-      commandes_fournisseurs.contenu.innerHTML = 'Erreur AJAX: ' + error.message;
+      this.contenu.innerHTML = 'Erreur AJAX: ' + error.message;
       console.error('Erreur:', error);
       button.textContent = originalText;
       button.disabled = false;

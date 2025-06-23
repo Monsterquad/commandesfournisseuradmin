@@ -4,8 +4,8 @@ class AdminOrdersController extends AdminOrdersControllerCore
 {
     public function postProcess()
     {
-        // Gérer les appels AJAX pour le module commandesfournisseuradmin
-        if ($this->ajax && Tools::getValue('action')) {
+        // Vérifier si c'est un appel AJAX pour notre module
+        if (Tools::getValue('ajax') && Tools::getValue('action')) {
             $action = Tools::getValue('action');
             if (in_array($action, ['mailcontents', 'envoimail'])) {
                 $this->processCommandesFournisseurAjax();
@@ -18,14 +18,18 @@ class AdminOrdersController extends AdminOrdersControllerCore
 
     private function processCommandesFournisseurAjax()
     {
-        $module = Module::getInstanceByName('commandesfournisseuradmin');
-        if (!$module || !$module->active) {
-            $this->ajaxDie(json_encode(['erreur' => 'Module non disponible']));
-        }
-
-        $action = Tools::getValue('action');
+        // Forcer le type de contenu JSON
+        header('Content-Type: application/json');
 
         try {
+            $module = Module::getInstanceByName('commandesfournisseuradmin');
+            if (!$module || !$module->active) {
+                $this->ajaxDie(json_encode(['erreur' => 'Module non disponible']));
+                return;
+            }
+
+            $action = Tools::getValue('action');
+
             switch ($action) {
                 case 'mailcontents':
                     $this->handleMailContents($module);
@@ -33,27 +37,42 @@ class AdminOrdersController extends AdminOrdersControllerCore
                 case 'envoimail':
                     $this->handleSendMail($module);
                     break;
+                default:
+                    $this->ajaxDie(json_encode(['erreur' => 'Action non reconnue: ' . $action]));
             }
         } catch (Exception $e) {
+            PrestaShopLogger::addLog('CommandesFournisseur Error: ' . $e->getMessage(), 3);
             $this->ajaxDie(json_encode(['erreur' => $e->getMessage()]));
         }
     }
 
     private function handleMailContents($module)
     {
-        $products = json_decode(Tools::getValue('products'), true);
+        $products_json = Tools::getValue('products');
         $order_ref = Tools::getValue('order_ref');
+
+        // Log pour debug
+        PrestaShopLogger::addLog('CommandesFournisseur mailcontents - Products JSON: ' . $products_json, 1);
+        PrestaShopLogger::addLog('CommandesFournisseur mailcontents - Order ref: ' . $order_ref, 1);
 
         if (!$order_ref) {
             $this->ajaxDie(json_encode(['erreur' => 'Pas de reference de commande.']));
+            return;
         }
 
+        $products = json_decode($products_json, true);
         if (empty($products)) {
             $this->ajaxDie(json_encode(['erreur' => 'Pas de produit selectionnés']));
+            return;
         }
 
-        $content = $module->getTemplateContents($products, $order_ref);
-        $this->ajaxDie(json_encode(['content' => $content, 'erreur' => '']));
+        try {
+            $content = $module->getTemplateContents($products, $order_ref);
+            $this->ajaxDie(json_encode(['content' => $content, 'erreur' => '']));
+        } catch (Exception $e) {
+            PrestaShopLogger::addLog('CommandesFournisseur getTemplateContents Error: ' . $e->getMessage(), 3);
+            $this->ajaxDie(json_encode(['erreur' => 'Erreur lors de la génération du contenu: ' . $e->getMessage()]));
+        }
     }
 
     private function handleSendMail($module)
@@ -61,10 +80,15 @@ class AdminOrdersController extends AdminOrdersControllerCore
         $email_destinataire = Tools::getValue('destinataire');
         $contenu_mail = Tools::getValue('contenu_mail');
         $id_mail = Tools::getValue('id_mail');
-        $products = json_decode(Tools::getValue('products'), true);
+        $products_json = Tools::getValue('products');
         $id_supplier = (int) Tools::getValue('id_supplier');
         $order_ref = Tools::getValue('order_ref');
 
+        // Log pour debug
+        PrestaShopLogger::addLog('CommandesFournisseur envoimail - Email: ' . $email_destinataire, 1);
+        PrestaShopLogger::addLog('CommandesFournisseur envoimail - Products JSON: ' . $products_json, 1);
+
+        $products = json_decode($products_json, true);
         if (is_null($products)) {
             throw new Exception('envoimail : Pas de produits dans le decodage json');
         }
@@ -73,11 +97,26 @@ class AdminOrdersController extends AdminOrdersControllerCore
             throw new Exception('envoimail : Pas de reference de commande.');
         }
 
-        // Appeler les méthodes du module
-        $this->sendMailToSupplier($email_destinataire, nl2br($contenu_mail), $order_ref, $module);
-        $module->recordSentMail($id_supplier, $products);
+        if (!$email_destinataire) {
+            throw new Exception('envoimail : Pas d\'email destinataire.');
+        }
 
-        $this->ajaxDie(json_encode(['content' => 'ok', 'id_mail' => $id_mail, 'erreur' => '']));
+        try {
+            // Envoi du mail
+            $result = $this->sendMailToSupplier($email_destinataire, nl2br($contenu_mail), $order_ref, $module);
+
+            if (!$result) {
+                throw new Exception('Erreur lors de l\'envoi du mail');
+            }
+
+            // Enregistrement en base
+            $module->recordSentMail($id_supplier, $products);
+
+            $this->ajaxDie(json_encode(['content' => 'ok', 'id_mail' => $id_mail, 'erreur' => '']));
+        } catch (Exception $e) {
+            PrestaShopLogger::addLog('CommandesFournisseur sendMail Error: ' . $e->getMessage(), 3);
+            $this->ajaxDie(json_encode(['erreur' => 'Erreur lors de l\'envoi: ' . $e->getMessage()]));
+        }
     }
 
     private function sendMailToSupplier(string $email_destinataire, string $contenu_mail, string $order_ref, $module): bool

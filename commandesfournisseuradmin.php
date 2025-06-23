@@ -1,10 +1,6 @@
 <?php
 /*
- * Commandes fournisseur en admin
- * Permet de faire des mails de commande fournisseur a partir des commandes d'admin.
- * Version adaptée pour PrestaShop 8.2
- *
- * @author  contact@seb7.fr
+ * Module principal modifié pour PS 8.2 avec gestion AJAX intégrée
  */
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -24,12 +20,9 @@ class Commandesfournisseuradmin extends Module
         $this->displayName = $this->l('Demandes de délai fournisseur en admin');
         $this->description = $this->l('Permet de faire des mails de demande de délai au fournisseur a partir des commandes d admin.');
 
-        $this->version = '2.0.0'; // Version PS 8.2
+        $this->version = '2.0.0';
         $this->author = 'sebastien monterisi';
         $this->author_uri = 'https://prestashop.seb7.fr';
-
-        // Suppression de la dépendance car plus compatible PS 8.2
-        // $this->dependencies = ['champmailfournisseurs'];
     }
 
     public function install(): bool
@@ -38,6 +31,7 @@ class Commandesfournisseuradmin extends Module
             return parent::install()
                 && $this->registerHook('displayBackOfficeHeader')
                 && $this->registerHook('displayAdminOrder')
+                && $this->registerHook('actionAdminControllerSetMedia')
                 && $this->installDb();
         } catch (\Exception $exception) {
             $message = "Impossible d'installer le module {$this->name} : " . $exception->getMessage();
@@ -59,38 +53,35 @@ class Commandesfournisseuradmin extends Module
             Context::getContext()->controller->addCSS($this->_path . 'views/css/admin.css');
             Context::getContext()->controller->addJS($this->_path . 'js/commandes-fournisseurs.js');
 
-            $url = Context::getContext()->link->getAdminLink('AdminOrders');
+            // Créer une URL d'action spécifique pour notre module
+            $module_url = Context::getContext()->link->getAdminLink('AdminModules', true, [], [
+                'configure' => $this->name,
+                'module_name' => $this->name
+            ]);
 
-            return "<script type=\"text/javascript\">var commandesfournisseur_action_url='$url';</script>";
+            return "<script type=\"text/javascript\">var commandesfournisseur_action_url='{$module_url}&ajax=1';</script>";
         }
 
         return '';
     }
 
     /**
-     * Hook pour l'affichage dans les commandes - Version PS 8.2
+     * Hook pour intercepter les requêtes AJAX du module
      */
-    public function hookDisplayAdminOrder(array $params): string
+    public function hookActionAdminControllerSetMedia()
     {
-        $id_order = (int) $params['id_order'];
-        $order = new Order($id_order);
-        $order_details = $order->getOrderDetailList();
-
-        // Récupérer les dates de commandes fournisseurs
-        $dates_commandes = $this->getSupplierOrderDates($order_details);
-
-        // Injecter le HTML et JavaScript pour ajouter les cases à cocher et le bouton
-        return $this->generateOrderInterface($order, $order_details, $dates_commandes);
+        // Vérifier si c'est une requête pour notre module
+        if (Tools::getValue('configure') === $this->name && Tools::getValue('ajax')) {
+            $this->processAjaxRequest();
+        }
     }
 
     /**
-     * Traite les appels AJAX
+     * Traite les requêtes AJAX directement dans le module
      */
-    public function getAjaxResponse()
+    private function processAjaxRequest()
     {
-        if (!Tools::getValue('ajax') || !Context::getContext()->employee) {
-            return false;
-        }
+        header('Content-Type: application/json');
 
         $action = Tools::getValue('action');
 
@@ -102,15 +93,18 @@ class Commandesfournisseuradmin extends Module
                 case 'envoimail':
                     $this->handleSendMail();
                     break;
+                default:
+                    $this->ajaxResponse(['erreur' => 'Action non reconnue: ' . $action]);
             }
         } catch (Exception $e) {
+            PrestaShopLogger::addLog('CommandesFournisseur Error: ' . $e->getMessage(), 3);
             $this->ajaxResponse(['erreur' => $e->getMessage()]);
         }
     }
 
     private function handleMailContents()
     {
-        $products = json_decode(Tools::getValue('products'), true);
+        $products_json = Tools::getValue('products');
         $order_ref = Tools::getValue('order_ref');
 
         if (!$order_ref) {
@@ -118,13 +112,18 @@ class Commandesfournisseuradmin extends Module
             return;
         }
 
+        $products = json_decode($products_json, true);
         if (empty($products)) {
             $this->ajaxResponse(['erreur' => 'Pas de produit selectionnés']);
             return;
         }
 
-        $content = $this->getTemplateContents($products, $order_ref);
-        $this->ajaxResponse(['content' => $content, 'erreur' => '']);
+        try {
+            $content = $this->getTemplateContents($products, $order_ref);
+            $this->ajaxResponse(['content' => $content, 'erreur' => '']);
+        } catch (Exception $e) {
+            $this->ajaxResponse(['erreur' => 'Erreur lors de la génération du contenu: ' . $e->getMessage()]);
+        }
     }
 
     private function handleSendMail()
@@ -132,10 +131,11 @@ class Commandesfournisseuradmin extends Module
         $email_destinataire = Tools::getValue('destinataire');
         $contenu_mail = Tools::getValue('contenu_mail');
         $id_mail = Tools::getValue('id_mail');
-        $products = json_decode(Tools::getValue('products'), true);
+        $products_json = Tools::getValue('products');
         $id_supplier = (int) Tools::getValue('id_supplier');
         $order_ref = Tools::getValue('order_ref');
 
+        $products = json_decode($products_json, true);
         if (is_null($products)) {
             throw new Exception('envoimail : Pas de produits dans le decodage json');
         }
@@ -144,319 +144,355 @@ class Commandesfournisseuradmin extends Module
             throw new Exception('envoimail : Pas de reference de commande.');
         }
 
-        $this->sendMailToSupplier($email_destinataire, nl2br($contenu_mail), $order_ref);
-        $this->recordSentMail($id_supplier, $products);
+        if (!$email_destinataire) {
+            throw new Exception('envoimail : Pas d\'email destinataire.');
+        }
 
-        $this->ajaxResponse(['content' => 'ok', 'id_mail' => $id_mail, 'erreur' => '']);
+        try {
+            $result = $this->sendMailToSupplier($email_destinataire, nl2br($contenu_mail), $order_ref);
+
+            if (!$result) {
+                throw new Exception('Erreur lors de l\'envoi du mail');
+            }
+
+            $this->recordSentMail($id_supplier, $products);
+
+            $this->ajaxResponse(['content' => 'ok', 'id_mail' => $id_mail, 'erreur' => '']);
+        } catch (Exception $e) {
+            $this->ajaxResponse(['erreur' => 'Erreur lors de l\'envoi: ' . $e->getMessage()]);
+        }
     }
 
     private function ajaxResponse($data)
     {
-        header('Content-Type: application/json');
         echo json_encode($data);
         exit;
     }
 
-    /**
- * Génère l'interface pour les commandes (cases à cocher + bouton + modal)
- */
-private function generateOrderInterface($order, $order_details, $dates_commandes): string
-{
-    // Get the admin URL
-    $admin_url = Context::getContext()->link->getAdminLink('AdminOrders');
+    public function hookDisplayAdminOrder(array $params): string
+    {
+        $id_order = (int) $params['id_order'];
+        $order = new Order($id_order);
+        $order_details = $order->getOrderDetailList();
 
-    $html = '<script type="text/javascript">
-    // Définir l\'URL d\'action si elle n\'existe pas
-    if (typeof window.commandesfournisseur_action_url === "undefined") {
-        window.commandesfournisseur_action_url = "' . $admin_url . '";
+        $dates_commandes = $this->getSupplierOrderDates($order_details);
+
+        return $this->generateOrderInterface($order, $order_details, $dates_commandes);
     }
-    
-    document.addEventListener("DOMContentLoaded", function() {
-        console.log("Script loaded - adding checkboxes and button");
-        
-        // Ajouter les cases à cocher dans le tableau des produits
-        var productTable = document.querySelector("#orderProducts, table");
-        if (!productTable) {
-            console.log("No product table found");
-            return;
-        }
-        console.log("Product table found:", productTable);
-        
-        var headerRow = productTable.querySelector("thead tr");
-        if (headerRow && !headerRow.querySelector(".mq-supplier-header")) {
-            var newHeader = document.createElement("th");
-            newHeader.className = "mq-supplier-header";
-            newHeader.textContent = "Demande délai";
-            headerRow.insertBefore(newHeader, headerRow.firstChild);
-            console.log("Header added");
+
+    private function generateOrderInterface($order, $order_details, $dates_commandes): string
+    {
+        // URL d'action pour notre module
+        $module_url = Context::getContext()->link->getAdminLink('AdminModules', true, [], [
+            'configure' => $this->name,
+            'module_name' => $this->name
+        ]);
+
+        $html = '<script type="text/javascript">
+        if (typeof window.commandesfournisseur_action_url === "undefined") {
+            window.commandesfournisseur_action_url = "' . $module_url . '&ajax=1";
         }
         
-        var productRows = productTable.querySelectorAll("tbody tr");
-        var productData = ' . json_encode($this->prepareProductData($order_details, $dates_commandes)) . ';
-        console.log("Product data:", productData);
-        
-        productRows.forEach(function(row, index) {
-            if (productData[index] && !row.querySelector(".mq-supplier-checkbox")) {
-                var newCell = document.createElement("td");
-                newCell.className = "mq-supplier-checkbox";
-                
-                var product = productData[index];
-                var checkbox = document.createElement("input");
-                checkbox.type = "checkbox";
-                checkbox.name = "mail_fournisseur[" + product.id_product + (product.id_product_attribute ? "_" + product.id_product_attribute : "") + "]";
-                checkbox.dataset.id_product = product.id_product;
-                checkbox.dataset.id_product_attribute = product.id_product_attribute || "0";
-                checkbox.dataset.reference = product.reference || "";
-                checkbox.dataset.order_ref = "' . $order->reference . '";
-                checkbox.title = "Cocher pour inclure dans la demande de délai";
-                
-                newCell.appendChild(checkbox);
-                row.insertBefore(newCell, row.firstChild);
-                console.log("Checkbox added for row", index);
+        document.addEventListener("DOMContentLoaded", function() {
+            console.log("Script loaded - adding checkboxes and button");
+            console.log("Action URL:", window.commandesfournisseur_action_url);
+            
+            var productTable = document.querySelector("#orderProducts, table");
+            if (!productTable) {
+                console.log("No product table found");
+                return;
             }
+            
+            var headerRow = productTable.querySelector("thead tr");
+            if (headerRow && !headerRow.querySelector(".mq-supplier-header")) {
+                var newHeader = document.createElement("th");
+                newHeader.className = "mq-supplier-header";
+                newHeader.textContent = "Demande délai";
+                headerRow.insertBefore(newHeader, headerRow.firstChild);
+            }
+            
+            var productRows = productTable.querySelectorAll("tbody tr");
+            var productData = ' . json_encode($this->prepareProductData($order_details, $dates_commandes)) . ';
+            
+            productRows.forEach(function(row, index) {
+                if (productData[index] && !row.querySelector(".mq-supplier-checkbox")) {
+                    var newCell = document.createElement("td");
+                    newCell.className = "mq-supplier-checkbox";
+                    
+                    var product = productData[index];
+                    var checkbox = document.createElement("input");
+                    checkbox.type = "checkbox";
+                    checkbox.name = "mail_fournisseur[" + product.id_product + (product.id_product_attribute ? "_" + product.id_product_attribute : "") + "]";
+                    checkbox.dataset.id_product = product.id_product;
+                    checkbox.dataset.id_product_attribute = product.id_product_attribute || "0";
+                    checkbox.dataset.reference = product.reference || "";
+                    checkbox.dataset.order_ref = "' . $order->reference . '";
+                    checkbox.title = "Cocher pour inclure dans la demande de délai";
+                    
+                    newCell.appendChild(checkbox);
+                    row.insertBefore(newCell, row.firstChild);
+                }
+            });
+            
+            setTimeout(function() {
+                addSupplierOrderButtonForced();
+            }, 1000);
         });
         
-        // Forcer l\'ajout du bouton après le tableau
-        setTimeout(function() {
-            addSupplierOrderButtonForced();
-        }, 1000);
-    });
-    
-    function addSupplierOrderButtonForced() {
-        console.log("Forcing button addition");
-        
-        if (document.getElementById("passer_commande_fournisseur")) {
-            console.log("Button already exists");
-            return;
-        }
-        
-        // Trouver le tableau des produits et ajouter après
-        var productTable = document.querySelector("#orderProducts, table");
-        if (!productTable) {
-            console.log("No table found for button placement");
-            return;
-        }
-        
-        // Créer le conteneur du bouton
-        var buttonContainer = document.createElement("div");
-        buttonContainer.className = "row-margin-bottom row-margin-top";
-        buttonContainer.style.marginTop = "20px";
-        buttonContainer.style.marginBottom = "20px";
-        
-        var buttonHtml = `
-            <button id="passer_commande_fournisseur" class="btn btn-default" type="button"
-                    onclick="openSupplierModal()">
-                <i class="icon-envelope-o"></i>
-                Faire une demande de délai
-            </button>
+        function addSupplierOrderButtonForced() {
+            if (document.getElementById("passer_commande_fournisseur")) {
+                return;
+            }
             
-            <div class="modal fade" id="passer_commande_fournisseur_modal" tabindex="-1" role="dialog" style="display:none;">
-                <div class="modal-dialog" role="document">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">Mail fournisseur</h5>
-                            <button type="button" class="close" onclick="closeSupplierModal()">
-                                <span>&times;</span>
-                            </button>
-                        </div>
-                        <div class="modal-body">
-                            <p>Patienter ...</p>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-primary" onclick="closeSupplierModal()">Terminé</button>
+            var productTable = document.querySelector("#orderProducts, table");
+            if (!productTable) {
+                return;
+            }
+            
+            var buttonContainer = document.createElement("div");
+            buttonContainer.className = "row-margin-bottom row-margin-top";
+            buttonContainer.style.marginTop = "20px";
+            
+            var buttonHtml = `
+                <button id="passer_commande_fournisseur" class="btn btn-default" type="button"
+                        onclick="openSupplierModal()">
+                    <i class="icon-envelope-o"></i>
+                    Faire une demande de délai
+                </button>
+                
+                <div class="modal fade" id="passer_commande_fournisseur_modal" tabindex="-1" role="dialog" style="display:none;">
+                    <div class="modal-dialog" role="document">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Mail fournisseur</h5>
+                                <button type="button" class="close" onclick="closeSupplierModal()">
+                                    <span>&times;</span>
+                                </button>
+                            </div>
+                            <div class="modal-body">
+                                <p>Patienter ...</p>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-primary" onclick="closeSupplierModal()">Terminé</button>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-        `;
-        
-        buttonContainer.innerHTML = buttonHtml;
-        
-        // Insérer après le tableau ou sa div parente
-        var insertAfter = productTable.closest(".panel") || productTable.parentNode;
-        insertAfter.parentNode.insertBefore(buttonContainer, insertAfter.nextSibling);
-        
-        console.log("Button added successfully");
-    }
-    
-    // Définir l\'objet commandes_fournisseurs si il n\'existe pas
-    if (typeof window.commandes_fournisseurs === "undefined") {
-        window.commandes_fournisseurs = {
-            modal: null,
-            contenu: null,
+            `;
             
-            drawMails: function(response) {
-                this.contenu.innerHTML = "";
+            buttonContainer.innerHTML = buttonHtml;
+            
+            var insertAfter = productTable.closest(".panel") || productTable.parentNode;
+            insertAfter.parentNode.insertBefore(buttonContainer, insertAfter.nextSibling);
+            
+            console.log("Button added successfully");
+        }
+        
+        if (typeof window.commandes_fournisseurs === "undefined") {
+            window.commandes_fournisseurs = {
+                modal: null,
+                contenu: null,
+                
+                drawMails: function(response) {
+                    this.contenu.innerHTML = "";
 
-                if (response.erreur && response.erreur.length > 0) {
-                    this.contenu.innerHTML = "Erreur : " + response.erreur;
+                    if (response.erreur && response.erreur.length > 0) {
+                        this.contenu.innerHTML = "Erreur : " + response.erreur;
+                        return;
+                    }
+
+                    const self = this;
+                    const draw_a_mail = function(supplier_products) {
+                        const titre = document.createElement("h4");
+                        const mailText = supplier_products.supplier.mail || "MAIL NON RENSEIGNÉ";
+                        titre.textContent = supplier_products.supplier.name + " (" + mailText + ")";
+
+                        const contenu_mail = document.createElement("textarea");
+                        contenu_mail.className = "form-control";
+                        contenu_mail.rows = 10;
+                        contenu_mail.value = supplier_products.mail;
+
+                        const bouton_envoi = document.createElement("button");
+                        bouton_envoi.textContent = "Envoyer le mail (" + supplier_products.supplier.mail + ")";
+                        bouton_envoi.className = "passer_commande_fournisseur_submit btn btn-primary mt-2";
+                        bouton_envoi.dataset.destinataire = supplier_products.supplier.mail;
+                        bouton_envoi.dataset.id_supplier = supplier_products.supplier.id_supplier;
+                        bouton_envoi.dataset.products = JSON.stringify(supplier_products.products);
+                        bouton_envoi.dataset.order_ref = supplier_products.order.ref;
+                        bouton_envoi.onclick = function(e) {
+                            self.envoimail(e);
+                        };
+
+                        const contenaire = document.createElement("div");
+                        contenaire.className = "mb-4";
+                        contenaire.dataset.uniqid = "id_" + Date.now();
+                        contenaire.appendChild(titre);
+                        contenaire.appendChild(contenu_mail);
+                        contenaire.appendChild(bouton_envoi);
+
+                        self.contenu.appendChild(contenaire);
+                    };
+
+                    const paragraphs = this.contenu.querySelectorAll("p");
+                    paragraphs.forEach(p => p.remove());
+
+                    response.content.forEach(draw_a_mail);
+                },
+                
+                envoimail: function(e) {
+                    e.preventDefault();
+
+                    const button = e.target;
+                    const originalText = button.textContent;
+                    button.textContent = "Patienter...";
+                    button.disabled = true;
+
+                    const parent_div = button.parentElement;
+                    const textarea = parent_div.querySelector("textarea");
+
+                    fetch(window.commandesfournisseur_action_url, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/x-www-form-urlencoded",
+                        },
+                        body: new URLSearchParams({
+                            "destinataire": button.dataset.destinataire,
+                            "contenu_mail": textarea.value,
+                            "id_mail": parent_div.dataset.uniqid,
+                            "id_supplier": button.dataset.id_supplier,
+                            "products": button.dataset.products,
+                            "order_ref": button.dataset.order_ref,
+                            "action": "envoimail"
+                        })
+                    })
+                    .then(response => {
+                        console.log("Response status:", response.status);
+                        const contentType = response.headers.get("content-type");
+                        console.log("Content-Type:", contentType);
+                        
+                        if (!contentType || !contentType.includes("application/json")) {
+                            return response.text().then(text => {
+                                console.log("Non-JSON response:", text.substring(0, 500));
+                                throw new Error("La réponse du serveur n\'est pas du JSON valide");
+                            });
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log("Response data:", data);
+                        window.commandes_fournisseurs.resultat_envoi_mails(data);
+                    })
+                    .catch(error => {
+                        console.error("Erreur complète:", error);
+                        window.commandes_fournisseurs.contenu.innerHTML = "Erreur AJAX: " + error.message;
+                        button.textContent = originalText;
+                        button.disabled = false;
+                    });
+
+                    return false;
+                },
+                
+                resultat_envoi_mails: function(response) {
+                    if (!response.erreur || response.erreur.length === 0) {
+                        const id_div_a_effacer = response.id_mail;
+                        const div = document.querySelector(`div[data-uniqid="${id_div_a_effacer}"]`);
+                        const button = div.querySelector("button");
+
+                        div.style.opacity = "0.6";
+                        button.className = "btn btn-secondary mt-2";
+                        button.textContent = "Envoyé";
+                        button.disabled = true;
+                        return;
+                    }
+
+                    alert("Erreur: " + response.erreur);
+                }
+            };
+        }
+        
+        window.openSupplierModal = function() {
+            console.log("Opening modal");
+            var modal = document.getElementById("passer_commande_fournisseur_modal");
+            if (modal) {
+                modal.style.display = "block";
+                modal.style.position = "fixed";
+                modal.style.zIndex = "9999";
+                modal.style.left = "0";
+                modal.style.top = "0";
+                modal.style.width = "100%";
+                modal.style.height = "100%";
+                modal.style.backgroundColor = "rgba(0,0,0,0.4)";
+                
+                window.commandes_fournisseurs.modal = modal;
+                window.commandes_fournisseurs.contenu = modal.querySelector(".modal-body");
+                
+                const checkedInputs = document.querySelectorAll("input[name^=\\"mail_fournisseur\\"]:checked");
+                
+                const products = Array.from(checkedInputs).map(function(input) {
+                    return {
+                        "id_product": input.dataset.id_product,
+                        "id_product_attribute": input.dataset.id_product_attribute,
+                        "reference": input.dataset.reference
+                    };
+                });
+                
+                if (products.length === 0) {
+                    window.commandes_fournisseurs.contenu.innerHTML = "Aucun produit sélectionné";
                     return;
                 }
-
-                const draw_a_mail = function(supplier_products) {
-                    // Création des éléments
-                    const titre = document.createElement("h4");
-                    const mailText = supplier_products.supplier.mail || "MAIL NON RENSEIGNÉ";
-                    titre.textContent = supplier_products.supplier.name + " (" + mailText + ")";
-
-                    const contenu_mail = document.createElement("textarea");
-                    contenu_mail.className = "form-control";
-                    contenu_mail.rows = 10;
-                    contenu_mail.value = supplier_products.mail;
-
-                    const bouton_envoi = document.createElement("button");
-                    bouton_envoi.textContent = "Envoyer le mail (" + supplier_products.supplier.mail + ")";
-                    bouton_envoi.className = "passer_commande_fournisseur_submit btn btn-primary mt-2";
-                    bouton_envoi.dataset.destinataire = supplier_products.supplier.mail;
-                    bouton_envoi.dataset.id_supplier = supplier_products.supplier.id_supplier;
-                    bouton_envoi.dataset.products = JSON.stringify(supplier_products.products);
-                    bouton_envoi.dataset.order_ref = supplier_products.order.ref;
-                    bouton_envoi.onclick = window.commandes_fournisseurs.envoimail;
-
-                    const contenaire = document.createElement("div");
-                    contenaire.className = "mb-4";
-                    contenaire.dataset.uniqid = "id_" + Date.now();
-                    contenaire.appendChild(titre);
-                    contenaire.appendChild(contenu_mail);
-                    contenaire.appendChild(bouton_envoi);
-
-                    window.commandes_fournisseurs.contenu.appendChild(contenaire);
-                };
-
-                // Supprimer les paragraphes existants
-                const paragraphs = this.contenu.querySelectorAll("p");
-                paragraphs.forEach(p => p.remove());
-
-                // Dessiner chaque mail
-                response.content.forEach(draw_a_mail);
-            },
-            
-            envoimail: function(e) {
-                e.preventDefault();
-
-                const button = e.target;
-                const originalText = button.textContent;
-                button.textContent = "Patienter...";
-                button.disabled = true;
-
-                const parent_div = button.parentElement;
-                const textarea = parent_div.querySelector("textarea");
-
+                
+                const order_ref = checkedInputs[0].dataset.order_ref;
+                
+                console.log("Sending request to:", window.commandesfournisseur_action_url);
+                console.log("Products:", products);
+                console.log("Order ref:", order_ref);
+                
                 fetch(window.commandesfournisseur_action_url, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/x-www-form-urlencoded",
                     },
                     body: new URLSearchParams({
-                        "destinataire": button.dataset.destinataire,
-                        "contenu_mail": textarea.value,
-                        "id_mail": parent_div.dataset.uniqid,
-                        "id_supplier": button.dataset.id_supplier,
-                        "products": button.dataset.products,
-                        "order_ref": button.dataset.order_ref,
-                        "action": "envoimail"
+                        "products": JSON.stringify(products),
+                        "action": "mailcontents",
+                        "order_ref": order_ref
                     })
                 })
-                .then(response => response.json())
-                .then(data => window.commandes_fournisseurs.resultat_envoi_mails(data))
+                .then(response => {
+                    console.log("Response status:", response.status);
+                    const contentType = response.headers.get("content-type");
+                    console.log("Content-Type:", contentType);
+                    
+                    if (!contentType || !contentType.includes("application/json")) {
+                        return response.text().then(text => {
+                            console.log("Non-JSON response:", text.substring(0, 500));
+                            throw new Error("La réponse du serveur n\'est pas du JSON valide");
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Response data:", data);
+                    window.commandes_fournisseurs.drawMails(data);
+                })
                 .catch(error => {
+                    console.error("Erreur complète:", error);
                     window.commandes_fournisseurs.contenu.innerHTML = "Erreur AJAX: " + error.message;
-                    console.error("Erreur:", error);
-                    button.textContent = originalText;
-                    button.disabled = false;
                 });
-
-                return false;
-            },
-            
-            resultat_envoi_mails: function(response) {
-                if (!response.erreur || response.erreur.length === 0) {
-                    const id_div_a_effacer = response.id_mail;
-                    const div = document.querySelector(`div[data-uniqid="${id_div_a_effacer}"]`);
-                    const button = div.querySelector("button");
-
-                    div.style.opacity = "0.6";
-                    button.className = "btn btn-secondary mt-2";
-                    button.textContent = "Envoyé";
-                    button.disabled = true;
-                    return;
-                }
-
-                alert("Erreur: " + response.erreur);
             }
         };
-    }
-    
-    // Fonctions pour la modal (sans Bootstrap)
-    window.openSupplierModal = function() {
-        console.log("Opening modal");
-        var modal = document.getElementById("passer_commande_fournisseur_modal");
-        if (modal) {
-            modal.style.display = "block";
-            modal.style.position = "fixed";
-            modal.style.zIndex = "9999";
-            modal.style.left = "0";
-            modal.style.top = "0";
-            modal.style.width = "100%";
-            modal.style.height = "100%";
-            modal.style.backgroundColor = "rgba(0,0,0,0.4)";
-            
-            // Déclencher l\'événement comme si Bootstrap l\'avait fait
-            window.commandes_fournisseurs.modal = modal;
-            window.commandes_fournisseurs.contenu = modal.querySelector(".modal-body");
-            
-            // Collecte des produits sélectionnés
-            const checkedInputs = document.querySelectorAll("input[name^=\\"mail_fournisseur\\"]:checked");
-            
-            const products = Array.from(checkedInputs).map(function(input) {
-                return {
-                    "id_product": input.dataset.id_product,
-                    "id_product_attribute": input.dataset.id_product_attribute,
-                    "reference": input.dataset.reference
-                };
-            });
-            
-            if (products.length === 0) {
-                window.commandes_fournisseurs.contenu.innerHTML = "Aucun produit sélectionné";
-                return;
+        
+        window.closeSupplierModal = function() {
+            var modal = document.getElementById("passer_commande_fournisseur_modal");
+            if (modal) {
+                modal.style.display = "none";
             }
-            
-            const order_ref = checkedInputs[0].dataset.order_ref;
-            
-            // Appel AJAX
-            fetch(window.commandesfournisseur_action_url, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-                body: new URLSearchParams({
-                    "products": JSON.stringify(products),
-                    "action": "mailcontents",
-                    "order_ref": order_ref
-                })
-            })
-            .then(response => response.json())
-            .then(data => window.commandes_fournisseurs.drawMails(data))
-            .catch(error => {
-                window.commandes_fournisseurs.contenu.innerHTML = "Erreur AJAX: " + error.message;
-                console.error("Erreur:", error);
-            });
-        }
-    };
-    
-    window.closeSupplierModal = function() {
-        var modal = document.getElementById("passer_commande_fournisseur_modal");
-        if (modal) {
-            modal.style.display = "none";
-        }
-    };
-    </script>';
+        };
+        </script>';
 
-    return $html;
-}
-    /**
-     * Prépare les données des produits pour JavaScript
-     */
+        return $html;
+    }
+
     private function prepareProductData($order_details, $dates_commandes): array
     {
         $data = [];
@@ -471,9 +507,6 @@ private function generateOrderInterface($order, $order_details, $dates_commandes
         return $data;
     }
 
-    /**
-     * Récupère les dates de commandes fournisseurs
-     */
     private function getSupplierOrderDates($order_details): array
     {
         $references = array_map(function ($detail) {
@@ -499,9 +532,6 @@ private function generateOrderInterface($order, $order_details, $dates_commandes
         return array_column($dates_commandes, 'date', 'reference');
     }
 
-    /**
-     * Contenu des mails à envoyer aux fournisseurs.
-     */
     public function getTemplateContents(array $products, string $order_ref): array
     {
         $grouped_by_supplier = [];
@@ -518,7 +548,6 @@ private function generateOrderInterface($order, $order_details, $dates_commandes
             }
         }
 
-        // construction des messages et ajout de la ref de commande
         array_walk($grouped_by_supplier, function (&$supplier_products) use ($order_ref) {
             $supplier_products['mail'] = $this->getMailContent($supplier_products['products']);
             $supplier_products['order']['ref'] = $order_ref;
