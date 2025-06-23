@@ -1,0 +1,7 @@
+
+[{shop_url}]
+
+{content}
+
+{shop_name} [{shop_url}]
+

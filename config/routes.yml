@@ -1,0 +1,5 @@
+commandesfournisseurs_mail_content:
+  path: commandesfournisseuradmin/mailcontents
+  methods: [GET]
+  defaults:
+    _controller: 'CommandesFournisseurAdmin\Controller\MailContentController::demoAction'
