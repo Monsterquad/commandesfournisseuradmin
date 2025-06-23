@@ -1,4 +1,18 @@
 <?php
+
+namespace commandesfournisseuradmin\override\controllers\admin;
+
+use AdminOrdersControllerCore;
+use commandesfournisseuradmin\Commandesfournisseuradmin;
+use Configuration;
+use Context;
+use Logger;
+use Mail;
+use Module;
+use Swift_Image;
+use Swift_Message;
+use Tools;
+
 /**
  * AdminOrdersController.php monsterquad_17
  *
@@ -62,7 +76,7 @@ class AdminOrdersController extends AdminOrdersControllerCore
                     $id_mail = Tools::getValue('id_mail');
                     $products = array_map('urldecode', explode(',', Tools::getValue('products')));
                     $products = json_decode(urldecode(Tools::getValue('products')), true);
-                    $id_supplier = (int) Tools::getValue('id_supplier');
+                    $id_supplier = (int)Tools::getValue('id_supplier');
                     $order_ref = Tools::getValue('order_ref');
 
                     try {
@@ -84,7 +98,7 @@ class AdminOrdersController extends AdminOrdersControllerCore
                     }
                     exit();
 //                    break;
-                    // ne pas déclencher d'erreur en prod : on passe par là pour d'autres action natives.
+                // ne pas déclencher d'erreur en prod : on passe par là pour d'autres action natives.
 //                default:
 //                    $this->ajaxRender(json_encode(['content' => '', 'erreur' => 'Erreur logique : $action inatendue.']), $this->controller_name);
             }
@@ -126,14 +140,14 @@ class AdminOrdersController extends AdminOrdersControllerCore
         $message = Swift_Message::newInstance();
         $shop_url = Context::getContext()->link->getPageLink('index', true);
 
-        return (bool) Mail::send(
+        return (bool)Mail::send(
             Context::getContext()->language->id,
             'commande',
             "[$order_ref] " . $this->module->l('Demande de Délai'),
             ['{content}' => $contenu_mail,
-             '{shop_name}' => Configuration::get('PS_SHOP_NAME'),
-             '{shop_logo}' => $logo ? $message->embed(Swift_Image::fromPath($logo)) : '',
-             '{shop_url}' => $shop_url,
+                '{shop_name}' => Configuration::get('PS_SHOP_NAME'),
+                '{shop_logo}' => $logo ? $message->embed(Swift_Image::fromPath($logo)) : '',
+                '{shop_url}' => $shop_url,
             ],
             $email_destinataire,
             null,
@@ -145,7 +159,7 @@ class AdminOrdersController extends AdminOrdersControllerCore
             false,
             null,
             'service-client@monsterquad.fr', // en dur, ça fait l'affaire ici.
-             $this->module->getMailSenderAddress()
+            $this->module->getMailSenderAddress()
         );
     }
 }

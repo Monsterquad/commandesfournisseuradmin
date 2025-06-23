@@ -1,5 +1,5 @@
 <?php
-namespace CommandesFournisseurAdmin\Controller;
+namespace commandesfournisseuradmin\src\Controller;
 
 use PrestaShopBundle\Controller\Admin\FrameworkBundleAdminController;
 use Symfony\Component\HttpFoundation\JsonResponse;
