@@ -6,6 +6,6 @@
     <description><![CDATA[Permet de faire des mails de demande de d&eacute;lai au fournisseur a partir des commandes d admin.]]></description>
     <author><![CDATA[sebastien monterisi]]></author><author_uri><![CDATA[https://prestashop.seb7.fr]]></author_uri>
     <tab><![CDATA[shipping_logistics]]></tab>
-    <is_configurable>0</is_configurable>
+    <is_configurable>1</is_configurable>
     <need_instance>1</need_instance>
 </module>
