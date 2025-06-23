@@ -164,9 +164,15 @@ class Commandesfournisseuradmin extends Module
     {
         $html = '<script type="text/javascript">
         document.addEventListener("DOMContentLoaded", function() {
+            console.log("Script loaded - adding checkboxes and button");
+            
             // Ajouter les cases à cocher dans le tableau des produits
             var productTable = document.querySelector("#orderProducts, table");
-            if (!productTable) return;
+            if (!productTable) {
+                console.log("No product table found");
+                return;
+            }
+            console.log("Product table found:", productTable);
             
             var headerRow = productTable.querySelector("thead tr");
             if (headerRow && !headerRow.querySelector(".mq-supplier-header")) {
@@ -174,10 +180,12 @@ class Commandesfournisseuradmin extends Module
                 newHeader.className = "mq-supplier-header";
                 newHeader.textContent = "Demande délai";
                 headerRow.insertBefore(newHeader, headerRow.firstChild);
+                console.log("Header added");
             }
             
             var productRows = productTable.querySelectorAll("tbody tr");
             var productData = ' . json_encode($this->prepareProductData($order_details, $dates_commandes)) . ';
+            console.log("Product data:", productData);
             
             productRows.forEach(function(row, index) {
                 if (productData[index] && !row.querySelector(".mq-supplier-checkbox")) {
@@ -196,30 +204,50 @@ class Commandesfournisseuradmin extends Module
                     
                     newCell.appendChild(checkbox);
                     row.insertBefore(newCell, row.firstChild);
+                    console.log("Checkbox added for row", index);
                 }
             });
             
-            // Ajouter le bouton et la modal
-            addSupplierOrderButton();
+            // Forcer l\'ajout du bouton après le tableau
+            setTimeout(function() {
+                addSupplierOrderButtonForced();
+            }, 1000);
         });
         
-        function addSupplierOrderButton() {
-            var actionsDiv = document.querySelector(".order_action, .well");
-            if (!actionsDiv || document.getElementById("passer_commande_fournisseur")) return;
+        function addSupplierOrderButtonForced() {
+            console.log("Forcing button addition");
+            
+            if (document.getElementById("passer_commande_fournisseur")) {
+                console.log("Button already exists");
+                return;
+            }
+            
+            // Trouver le tableau des produits et ajouter après
+            var productTable = document.querySelector("#orderProducts, table");
+            if (!productTable) {
+                console.log("No table found for button placement");
+                return;
+            }
+            
+            // Créer le conteneur du bouton
+            var buttonContainer = document.createElement("div");
+            buttonContainer.className = "row-margin-bottom row-margin-top";
+            buttonContainer.style.marginTop = "20px";
+            buttonContainer.style.marginBottom = "20px";
             
             var buttonHtml = `
                 <button id="passer_commande_fournisseur" class="btn btn-default" type="button"
-                        data-toggle="modal" data-target="#passer_commande_fournisseur_modal">
+                        onclick="openSupplierModal()">
                     <i class="icon-envelope-o"></i>
                     Faire une demande de délai
                 </button>
                 
-                <div class="modal fade" id="passer_commande_fournisseur_modal" tabindex="-1" role="dialog">
+                <div class="modal fade" id="passer_commande_fournisseur_modal" tabindex="-1" role="dialog" style="display:none;">
                     <div class="modal-dialog" role="document">
                         <div class="modal-content">
                             <div class="modal-header">
                                 <h5 class="modal-title">Mail fournisseur</h5>
-                                <button type="button" class="close" data-dismiss="modal">
+                                <button type="button" class="close" onclick="closeSupplierModal()">
                                     <span>&times;</span>
                                 </button>
                             </div>
@@ -227,15 +255,85 @@ class Commandesfournisseuradmin extends Module
                                 <p>Patienter ...</p>
                             </div>
                             <div class="modal-footer">
-                                <button type="button" class="btn btn-primary" data-dismiss="modal">Terminé</button>
+                                <button type="button" class="btn btn-primary" onclick="closeSupplierModal()">Terminé</button>
                             </div>
                         </div>
                     </div>
                 </div>
             `;
             
-            actionsDiv.insertAdjacentHTML("beforeend", buttonHtml);
+            buttonContainer.innerHTML = buttonHtml;
+            
+            // Insérer après le tableau ou sa div parente
+            var insertAfter = productTable.closest(".panel") || productTable.parentNode;
+            insertAfter.parentNode.insertBefore(buttonContainer, insertAfter.nextSibling);
+            
+            console.log("Button added successfully");
         }
+        
+        // Fonctions pour la modal (sans Bootstrap)
+        window.openSupplierModal = function() {
+            console.log("Opening modal");
+            var modal = document.getElementById("passer_commande_fournisseur_modal");
+            if (modal) {
+                modal.style.display = "block";
+                modal.style.position = "fixed";
+                modal.style.zIndex = "9999";
+                modal.style.left = "0";
+                modal.style.top = "0";
+                modal.style.width = "100%";
+                modal.style.height = "100%";
+                modal.style.backgroundColor = "rgba(0,0,0,0.4)";
+                
+                // Déclencher l\'événement comme si Bootstrap l\'avait fait
+                commandes_fournisseurs.modal = modal;
+                commandes_fournisseurs.contenu = modal.querySelector(".modal-body");
+                
+                // Collecte des produits sélectionnés
+                const checkedInputs = document.querySelectorAll("input[name^=\"mail_fournisseur\"]:checked");
+                
+                const products = Array.from(checkedInputs).map(function(input) {
+                    return {
+                        "id_product": input.dataset.id_product,
+                        "id_product_attribute": input.dataset.id_product_attribute,
+                        "reference": input.dataset.reference
+                    };
+                });
+                
+                if (products.length === 0) {
+                    commandes_fournisseurs.contenu.innerHTML = "Aucun produit sélectionné";
+                    return;
+                }
+                
+                const order_ref = checkedInputs[0].dataset.order_ref;
+                
+                // Appel AJAX
+                fetch(commandesfournisseur_action_url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    body: new URLSearchParams({
+                        "products": JSON.stringify(products),
+                        "action": "mailcontents",
+                        "order_ref": order_ref
+                    })
+                })
+                .then(response => response.json())
+                .then(data => commandes_fournisseurs.drawMails(data))
+                .catch(error => {
+                    commandes_fournisseurs.contenu.innerHTML = "Erreur AJAX: " + error.message;
+                    console.error("Erreur:", error);
+                });
+            }
+        };
+        
+        window.closeSupplierModal = function() {
+            var modal = document.getElementById("passer_commande_fournisseur_modal");
+            if (modal) {
+                modal.style.display = "none";
+            }
+        };
         </script>';
 
         return $html;
@@ -435,29 +533,19 @@ class Commandesfournisseuradmin extends Module
         return $this->processSqlFile(__DIR__ . '/sql/uninstall.sql');
     }
 
-   private function processSqlFile(string $path): bool
-{
-    $sql_content = file_get_contents($path);
-    if (!$sql_content) {
-        throw new Exception("Impossible de charger le fichier sql $path");
-    }
-
-    $sql_content = str_replace('{prefix}', _DB_PREFIX_, $sql_content);
-
-    // Séparer les requêtes SQL
-    $queries = explode(';', $sql_content);
-
-    foreach ($queries as $query) {
-        $query = trim($query);
-        if (empty($query)) {
-            continue;
+    private function processSqlFile(string $path): bool
+    {
+        $queries = file_get_contents($path);
+        if (!$queries) {
+            throw new Exception("Impossible de charger le fichier sql $path");
         }
 
-        if (!Db::getInstance()->execute($query)) {
-            throw new Exception('Erreur execution sql : ' . Db::getInstance()->getMsgError() . ' - Query: ' . $query);
-        }
-    }
+        $queries = str_replace('{prefix}', _DB_PREFIX_, $queries);
 
-    return true;
-}
+        if (!Db::getInstance()->execute($queries)) {
+            throw new Exception('Erreur execution sql : ' . Db::getInstance()->getMsgError());
+        }
+
+        return true;
+    }
 }
