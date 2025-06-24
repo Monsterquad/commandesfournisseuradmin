@@ -1,3 +1,6 @@
+# NOTE IMPORTANTE
+Ce module charge jQuery via CDN dans le back-office pour assurer la compatibilité des scripts (modale, AJAX, etc.) sur PrestaShop 8.2.
+
 # Module MQ Commande Fournisseur
 
 ## Description

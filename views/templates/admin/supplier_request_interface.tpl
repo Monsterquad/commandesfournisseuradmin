@@ -59,6 +59,8 @@
 </div>
 
 <script type="text/javascript">
+  window.mqsupplier_action_url = '/admin704njnfsy/modules/mqcommandefournisseur/supplier-request/ajax';
+
 document.addEventListener('DOMContentLoaded', function() {
     console.log('MQ Supplier Request module initializing...');
     
@@ -455,6 +457,8 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('id_supplier', button.getAttribute('data-id_supplier'));
         formData.append('products', button.getAttribute('data-products'));
         formData.append('order_ref', button.getAttribute('data-order_ref'));
+
+        console.log('MQ Supplier: action_url:', window.mqsupplier_action_url);
         
         fetch(window.mqsupplier_action_url, {
             method: 'POST',
@@ -503,4 +507,5 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 });
+
 </script> 

@@ -21,11 +21,6 @@ class MqCommandeFournisseur extends Module
         $this->ps_versions_compliancy = ['min' => '8.0.0', 'max' => '8.2.99'];
 
         parent::__construct();
-        
-        // Gérer les requêtes AJAX
-        if (Tools::getValue('ajax_supplier_request')) {
-            $this->handleAjaxRequest();
-        }
     }
 
     public function install(): bool
@@ -60,29 +55,16 @@ class MqCommandeFournisseur extends Module
      */
     public function hookDisplayBackOfficeHeader(): string
     {
-        // Debug pour voir si le hook se déclenche
-        $controllerName = get_class(Context::getContext()->controller);
-        $debug = "<script>console.log('MQ Supplier: hookDisplayBackOfficeHeader called, controller: $controllerName');</script>";
-        
-        // Vérifier si nous sommes dans une page de commande (AdminOrders ou AdminLegacyLayoutController avec page d'ordre)
-        $isOrderPage = (
-            Context::getContext()->controller instanceof AdminOrdersController ||
-            (isset($_GET['controller']) && $_GET['controller'] === 'AdminOrders') ||
-            (strpos($_SERVER['REQUEST_URI'] ?? '', 'AdminOrders') !== false)
-        );
-        
-        if ($isOrderPage) {
-            // Utiliser la même URL que l'ancien module - AdminOrders 
-            $ajaxUrl = $this->context->link->getAdminLink('AdminOrders');
-
-            return $debug . "<script type=\"text/javascript\">
-                window.mqsupplier_action_url = '$ajaxUrl';
-                console.log('MQ Supplier: URL configured for AdminOrders:', window.mqsupplier_action_url);
-                console.log('MQ Supplier: Module loaded and ready');
-            </script>";
+        if (Context::getContext()->controller instanceof AdminController) {
+            // Ajout du CDN jQuery si non déjà présent
+            $jqueryCdn = '<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>';
+            // Ajout du JS de la modale
+            $jsModule = '<script src="' . $this->_path . 'js/commandes-fournisseurs.js"></script>';
+            // Ajout du CSS
+            $cssModule = '<link rel="stylesheet" href="' . $this->_path . 'views/css/admin.css">';
+            return $jqueryCdn . $jsModule . $cssModule;
         }
-
-        return $debug;
+        return '';
     }
 
     /**
@@ -113,22 +95,7 @@ class MqCommandeFournisseur extends Module
             $content = $this->createFallbackInterface($order);
         }
         
-        // Debug plus détaillé
-        $debug = '<script>
-            console.log("MQ Supplier: hookDisplayAdminOrderMainBottom appelé pour commande ' . $order->reference . '");
-            console.log("MQ Supplier: Template content length:", ' . strlen($content) . ');
-            console.log("MQ Supplier: Looking for button #mq-send-supplier-requests...");
-            setTimeout(function() {
-                var btn = document.getElementById("mq-send-supplier-requests");
-                console.log("MQ Supplier: Button found:", btn ? "YES" : "NO");
-                if (btn) {
-                    console.log("MQ Supplier: Button disabled?", btn.disabled);
-                    console.log("MQ Supplier: Button onclick?", btn.onclick);
-                }
-            }, 2000);
-        </script>';
-        
-        return $debug . $content;
+        return $content;
     }
 
     /**
@@ -292,9 +259,9 @@ class MqCommandeFournisseur extends Module
         error_log('MQ Supplier: Produits trouvés: ' . print_r($products, true));
         
                  // Créer l'interface complète directement en JavaScript
-         $actionUrl = $this->context->link->getAdminLink('AdminOrders');
-         $js = '
-         <script type="text/javascript">
+                 $actionUrl = '/admin704njnfsy/modules/mqcommandefournisseur/supplier-request/ajax';         
+                 $js = '
+                 <script type="text/javascript">
          window.mqOrderReference = "' . $order_reference . '";
          window.mqOrderProducts = ' . $products_json . ';
          window.mqsupplier_action_url = "' . $actionUrl . '";
@@ -712,16 +679,12 @@ class MqCommandeFournisseur extends Module
             formData.append("order_reference", window.mqOrderReference);
             formData.append("selected_products", JSON.stringify(selectedProducts));
 
-            console.log(window.mqsupplier_action_url);
+            console.log(window.mqsupplier_action_url, "coucou");
             console.log(selectedProducts);
 
             
-                         // Utiliser une URL alternative pour éviter les problèmes d\'override
-             var moduleUrl = window.mqsupplier_action_url.replace("AdminOrders", "AdminModules");
-             moduleUrl += "&configure=mqcommandefournisseur&ajax_supplier_request=1";
-             
-             // Envoi de la requête
-             fetch(moduleUrl, {
+                         // Envoi de la requête vers l\'override AdminOrdersController
+             fetch(window.mqsupplier_action_url, {
                  method: "POST",
                  body: formData
              })
@@ -903,94 +866,7 @@ class MqCommandeFournisseur extends Module
         return true;
     }
 
-    private function handleAjaxRequest()
-    {
-        $response = ['success' => false, 'message' => ''];
-        
-        try {
-            $action = Tools::getValue('action');
-            
-            if ($action === 'sendSupplierRequests') {
-                $orderReference = Tools::getValue('order_reference');
-                $selectedProductsJson = Tools::getValue('selected_products');
-                
-                if (empty($orderReference) || empty($selectedProductsJson)) {
-                    throw new Exception('Données manquantes');
-                }
-                
-                $selectedProducts = json_decode($selectedProductsJson, true);
-                if (!is_array($selectedProducts) || empty($selectedProducts)) {
-                    throw new Exception('Aucun produit sélectionné');
-                }
-                
-                // Générer le contenu des emails par fournisseur
-                $emailsData = $this->getEmailContent($selectedProducts, $orderReference);
-                
-                if (empty($emailsData)) {
-                    throw new Exception('Aucun fournisseur trouvé pour les produits sélectionnés');
-                }
-                
-                $sentCount = 0;
-                $errors = [];
-                
-                foreach ($emailsData as $supplierData) {
-                    try {
-                        $supplier = $supplierData['supplier'];
-                        $products = $supplierData['products'];
-                        
-                        if (empty($supplier['email'])) {
-                            $errors[] = "Pas d'email pour le fournisseur " . ($supplier['name'] ?? 'Inconnu');
-                            continue;
-                        }
-                        
-                        $subject = "Demande de délai - Commande $orderReference";
-                        
-                        // Envoi de l'email simple
-                        $emailContent = $this->generateEmailContent($products, $orderReference);
-                        
-                        $sent = mail(
-                            $supplier['email'],
-                            $subject,
-                            $emailContent,
-                            "From: " . $this->getMailSenderAddress() . "\r\n" .
-                            "Reply-To: " . $this->getMailSenderAddress() . "\r\n" .
-                            "X-Mailer: PHP/" . phpversion()
-                        );
-                        
-                        if ($sent) {
-                            $sentCount++;
-                            // Enregistrer l'historique
-                            $this->recordSupplierRequest($supplier['id_supplier'], $products);
-                        } else {
-                            $errors[] = "Échec d'envoi pour " . $supplier['name'];
-                        }
-                        
-                    } catch (Exception $e) {
-                        $errors[] = "Erreur pour fournisseur: " . $e->getMessage();
-                    }
-                }
-                
-                if ($sentCount > 0) {
-                    $message = "$sentCount demande(s) envoyée(s) avec succès";
-                    if (!empty($errors)) {
-                        $message .= ". Erreurs: " . implode(', ', $errors);
-                    }
-                    $response = ['success' => true, 'message' => $message];
-                } else {
-                    $response = ['success' => false, 'message' => 'Aucun email envoyé. Erreurs: ' . implode(', ', $errors)];
-                }
-            } else {
-                throw new Exception('Action non reconnue');
-            }
-            
-        } catch (Exception $e) {
-            $response = ['success' => false, 'message' => $e->getMessage()];
-        }
-        
-        header('Content-Type: application/json');
-        echo json_encode($response);
-        exit;
-    }
+
 
 
 

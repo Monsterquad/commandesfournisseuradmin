@@ -1,0 +1,7 @@
+mqcommandefournisseur_supplier_request:
+  path: /modules/mqcommandefournisseur/supplier-request/ajax
+  methods: [POST, GET]
+  defaults:
+    _controller: 'Mqcommandefournisseur\\Controller\\SupplierRequestController::ajaxAction'
+  options:
+    expose: true
