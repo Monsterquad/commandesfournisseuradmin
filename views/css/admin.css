@@ -1,7 +1,188 @@
-#passer_commande_fournisseur_modal .modal-body {
-    height: 600px;
+/* Module MQ Commande Fournisseur - Styles admin */
+
+#mq-supplier-request-section {
+    margin-top: 20px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
 }
 
-#passer_commande_fournisseur_modal .modal-body textarea {
-    height: 200px;
+#mq-supplier-request-section .panel-heading {
+    background: linear-gradient(to bottom, #f5f5f5 0%, #e8e8e8 100%);
+    border-bottom: 1px solid #ddd;
+    color: #333;
+    font-weight: bold;
+    position: relative;
+    padding: 10px 15px;
 }
+
+#mq-supplier-request-section .panel-heading i {
+    margin-right: 8px;
+}
+
+#mq-supplier-request-section .panel-actions {
+    position: absolute;
+    right: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+#mq-supplier-request-section .table {
+    margin-bottom: 15px;
+}
+
+#mq-supplier-request-section .table th {
+    background-color: #f9f9f9;
+    border-top: none;
+    font-weight: 600;
+}
+
+.mq-product-checkbox {
+    transform: scale(1.1);
+    margin-right: 5px;
+}
+
+#mq-select-all {
+    transform: scale(1.1);
+    margin-right: 8px;
+}
+
+#mq-send-supplier-requests {
+    padding: 8px 16px;
+    font-weight: bold;
+}
+
+#mq-send-supplier-requests:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+#mq-selected-count {
+    margin-left: 15px;
+    font-style: italic;
+}
+
+#mq-messages {
+    border-radius: 4px;
+    padding: 12px;
+    margin-top: 15px;
+}
+
+.supplier-info {
+    font-size: 12px;
+}
+
+.supplier-info .icon-spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    #mq-supplier-request-section .table-responsive {
+        font-size: 12px;
+    }
+    
+    #mq-supplier-request-section .table th,
+    #mq-supplier-request-section .table td {
+        padding: 6px;
+    }
+    
+    #mq-send-supplier-requests {
+        width: 100%;
+        margin-bottom: 10px;
+    }
+    
+    #mq-selected-count {
+        margin-left: 0;
+        display: block;
+    }
+}
+
+/* Style pour les messages de statut */
+.text-success {
+    color: #3c763d !important;
+}
+
+.text-muted {
+    color: #777 !important;
+}
+
+/* Animation pour les cases à cocher */
+.mq-product-checkbox:checked {
+    background-color: #5cb85c;
+    border-color: #4cae4c;
+}
+
+/* Style pour les dernières demandes */
+.table td small {
+    font-size: 11px;
+}
+
+/* Hover effects */
+#mq-supplier-request-section .table tbody tr:hover {
+    background-color: #f9f9f9;
+}
+
+#mq-send-supplier-requests:not(:disabled):hover {
+    background-color: #286090;
+    border-color: #204d74;
+}
+
+/* Styles pour les colonnes ajoutées dans le tableau des commandes */
+.mq-supplier-header {
+    background-color: #f8f9fa !important;
+    border: 1px solid #ddd !important;
+    text-align: center !important;
+    vertical-align: middle !important;
+    width: 120px !important;
+}
+
+.mq-supplier-cell {
+    background-color: #f8f9fa;
+    border: 1px solid #ddd;
+    text-align: center;
+    vertical-align: middle;
+    width: 120px;
+    min-width: 120px;
+}
+
+.mq-supplier-cell .mq-product-checkbox {
+    transform: scale(1.2);
+    margin: 0;
+}
+
+#mq-select-all-orders {
+    transform: scale(1.2);
+    margin: 0;
+}
+
+/* Animation pour les nouvelles cases à cocher */
+.mq-product-checkbox:checked {
+    background-color: #5cb85c;
+    border-color: #4cae4c;
+}
+
+/* Style des dernières demandes dans le tableau */
+.mq-supplier-cell small {
+    display: block;
+    line-height: 1.2;
+    margin-top: 3px;
+}
+
+/* Responsive pour les nouvelles colonnes */
+@media (max-width: 768px) {
+    .mq-supplier-header,
+    .mq-supplier-cell {
+        width: 80px !important;
+        min-width: 80px !important;
+        font-size: 11px;
+    }
+    
+    .mq-supplier-cell small {
+        font-size: 9px;
+    }
+} 

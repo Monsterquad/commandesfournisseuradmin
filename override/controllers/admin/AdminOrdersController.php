@@ -1,29 +1,15 @@
 <?php
 
-namespace commandesfournisseuradmin\override\controllers\admin;
+if (!defined('_PS_VERSION_')) {
+    exit;
+}
 
-use AdminOrdersControllerCore;
-use commandesfournisseuradmin\Commandesfournisseuradmin;
-use Configuration;
-use Context;
-use Logger;
-use Mail;
-use Module;
-use Swift_Image;
-use Swift_Message;
-use Tools;
-
-/**
- * AdminOrdersController.php monsterquad_17
- *
- * @author Sébastien Monterisi <contact@seb7.fr>
- */
 class AdminOrdersController extends AdminOrdersControllerCore
 {
     /**
-     * @var Commandesfournisseuradmin
+     * @var MqCommandeFournisseur
      */
-    private $module;
+    private $mqModule;
 
     public function postProcess()
     {
@@ -33,133 +19,271 @@ class AdminOrdersController extends AdminOrdersControllerCore
 
         parent::postProcess();
 
-        $erreur = '';
-        $content = '';
         try {
-            /*
-             * @var commandesfournisseuradmin
-             */
-            /* @phpstan-ignore-next-line */
-            $this->module = Module::getInstanceByName('commandesfournisseuradmin');
-            /* @phpstan-ignore-next-line */
-            if (false === $this->module) {
-                throw new Exception('Module commandesfournisseuradmin non installé.');
+            // Vérifier si c'est une requête pour notre module
+            $action = Tools::getValue('action');
+            if (!in_array($action, ['mqmailcontents', 'mqenvoimail'])) {
+                return; // Laisser les autres actions au contrôleur parent
             }
 
-            $action = Tools::getValue('action');
+            $this->mqModule = Module::getInstanceByName('mqcommandefournisseur');
+            if (false === $this->mqModule) {
+                throw new Exception('Module mqcommandefournisseur non installé.');
+            }
+
             switch ($action) {
-                case 'mailcontents':
-                    $products = Tools::getValue('products', []);
-                    $order_ref = Tools::getValue('order_ref');
-
-                    // --- erreurs
-                    if (!$order_ref) {
-                        $this->ajaxRender(json_encode(['content' => 'erreur.', 'erreur' => 'Pas de reference de commande.']), $this->controller_name);
-                        Logger::AddLog('commandesfournisseuradmin AdminOrdersController pas reference de commande.');
-                        break;
-                    }
-
-                    if (empty($products)) {
-                        $this->ajaxRender(json_encode(['content' => 'erreur.', 'erreur' => 'Pas de produit selectionnés']), $this->controller_name);
-                        Logger::AddLog('commandesfournisseuradmin AdminOrdersController pas de produits selectionnés');
-                        break;
-                    }
-
-                    // --- envoi
-                    /* @phpstan-ignore-next-line */
-                    $this->ajaxRender(json_encode(['content' => $this->module->getTemplateContents($products, $order_ref), 'erreur' => $erreur]), $this->className);
+                case 'mqmailcontents':
+                    $this->processMqMailContents();
                     break;
-
-                case 'envoimail':
-                    $email_destinataire = Tools::getValue('destinataire');
-                    $contenu_mail = Tools::getValue('contenu_mail');
-                    $id_mail = Tools::getValue('id_mail');
-                    $products = array_map('urldecode', explode(',', Tools::getValue('products')));
-                    $products = json_decode(urldecode(Tools::getValue('products')), true);
-                    $id_supplier = (int)Tools::getValue('id_supplier');
-                    $order_ref = Tools::getValue('order_ref');
-
-                    try {
-                        if (is_null($products)) {
-                            throw new Exception('envoimail : Pas de produits dans le decodage json');
-                        }
-
-                        if (!$order_ref) {
-                            throw new \Exception('envoimail : Panque reference de commande. ');
-                        }
-
-                        $this->sendMailToSupplier($email_destinataire, nl2br($contenu_mail), $order_ref);
-                        /* @phpstan-ignore-next-line */
-                        $this->module->recordSentMail($id_supplier, $products);
-                        $this->ajaxRender(json_encode(['content' => 'ok', 'id_mail' => $id_mail, 'erreur' => '']), $this->controller_name);
-                    } catch (Exception $exception) {
-                        Logger::AddLog('commandesfournisseuradmin AdminOrdersController Erreur insertion sql  :  ' . $exception->getMessage());
-                        $this->ajaxRender(json_encode(['content' => 'erreur.' . $id_mail, 'erreur' => 'erreur envoi mail : ' . $exception->getMessage()]), $this->controller_name);
-                    }
-                    exit();
-//                    break;
-                // ne pas déclencher d'erreur en prod : on passe par là pour d'autres action natives.
-//                default:
-//                    $this->ajaxRender(json_encode(['content' => '', 'erreur' => 'Erreur logique : $action inatendue.']), $this->controller_name);
+                    
+                case 'mqenvoimail':
+                    $this->processMqEnvoiMail();
+                    break;
             }
         } catch (Exception $exception) {
             if (_PS_MODE_DEV_) {
                 throw $exception;
             }
 
-            Logger::AddLog('commandesfournisseuradmin AdminOrdersController :  ' . $exception->getMessage());
-
-            return false;
+            PrestaShopLogger::addLog('mqcommandefournisseur AdminOrdersController: ' . $exception->getMessage());
+            $this->ajaxRender(json_encode([
+                'content' => '',
+                'erreur' => 'Erreur: ' . $exception->getMessage()
+            ]));
         }
     }
 
     /**
-     * {@inheritdoc}
-     * @deprecated  Remplacé par le hook
-     * Overridé pour ajouter le champs 'date_commande_fournisseur' aux produits.
+     * Traite la demande de contenu des emails (génération des templates)
      */
-    protected function getProducts_disabled($order): array
+    private function processMqMailContents()
     {
-        $products = parent::getProducts($order);
+        $products = Tools::getValue('products', []);
+        $orderRef = Tools::getValue('order_ref');
 
+        if (!$orderRef) {
+            $this->ajaxRender(json_encode([
+                'content' => '',
+                'erreur' => 'Pas de référence de commande.'
+            ]));
+            return;
+        }
+
+        if (empty($products)) {
+            $this->ajaxRender(json_encode([
+                'content' => '',
+                'erreur' => 'Pas de produits sélectionnés.'
+            ]));
+            return;
+        }
+
+        // Utiliser la méthode du module pour générer les templates
+        $content = $this->mqModule->getEmailContent($products, $orderRef);
+        
+        $this->ajaxRender(json_encode([
+            'content' => $content,
+            'erreur' => ''
+        ]));
     }
 
     /**
-     * Envoi du mail au fournisseur.
-     * + copie a monsterquad.
-     *
-     * @param string $email_destinataire
-     * @param string $contenu_mail
-     * @param string $order_ref
-     *
-     * @return bool
+     * Traite l'envoi des emails aux fournisseurs
      */
-    private function sendMailToSupplier(string $email_destinataire, string $contenu_mail, string $order_ref): bool
+    private function processMqEnvoiMail()
     {
-        $logo = Configuration::get('PS_LOGO_MAIL') ? _PS_IMG_DIR_ . Configuration::get('PS_LOGO_MAIL') : '';
-        $message = Swift_Message::newInstance();
-        $shop_url = Context::getContext()->link->getPageLink('index', true);
+        $emailDestinataire = Tools::getValue('destinataire');
+        $contenuMail = Tools::getValue('contenu_mail');
+        $idMail = Tools::getValue('id_mail');
+        $products = json_decode(Tools::getValue('products'), true);
+        $idSupplier = (int) Tools::getValue('id_supplier');
+        $orderRef = Tools::getValue('order_ref');
 
-        return (bool)Mail::send(
-            Context::getContext()->language->id,
-            'commande',
-            "[$order_ref] " . $this->module->l('Demande de Délai'),
-            ['{content}' => $contenu_mail,
-                '{shop_name}' => Configuration::get('PS_SHOP_NAME'),
-                '{shop_logo}' => $logo ? $message->embed(Swift_Image::fromPath($logo)) : '',
-                '{shop_url}' => $shop_url,
-            ],
-            $email_destinataire,
+        if (is_null($products)) {
+            throw new Exception('Erreur décodage JSON des produits');
+        }
+
+        if (!$orderRef) {
+            throw new Exception('Pas de référence de commande');
+        }
+
+        if (!$emailDestinataire) {
+            throw new Exception('Pas d\'email destinataire');
+        }
+
+        try {
+            // Envoi de l'email
+            $success = $this->sendMailToSupplier($emailDestinataire, nl2br($contenuMail), $orderRef);
+            
+            if ($success) {
+                // Enregistrement en base de données
+                if (method_exists($this->mqModule, 'recordSupplierRequest')) {
+                    $this->mqModule->recordSupplierRequest($idSupplier, $products);
+                }
+                
+                $this->ajaxRender(json_encode([
+                    'content' => 'ok',
+                    'id_mail' => $idMail,
+                    'erreur' => ''
+                ]));
+            } else {
+                throw new Exception('Échec envoi email');
+            }
+        } catch (Exception $e) {
+            $this->ajaxRender(json_encode([
+                'content' => 'erreur',
+                'id_mail' => $idMail,
+                'erreur' => 'Erreur envoi mail: ' . $e->getMessage()
+            ]));
+        }
+    }
+
+    /**
+     * Envoi du mail au fournisseur
+     */
+    private function sendMailToSupplier(string $emailDestinataire, string $contenuMail, string $orderRef): bool
+    {
+        $subject = "[$orderRef] Demande de délai";
+        
+        $templateVars = [
+            '{content}' => $contenuMail,
+            '{shop_name}' => Configuration::get('PS_SHOP_NAME'),
+            '{shop_url}' => $this->context->link->getPageLink('index', true),
+            '{order_reference}' => $orderRef
+        ];
+
+        return Mail::Send(
+            (int)Context::getContext()->language->id,
+            'supplier_request',
+            $subject,
+            $templateVars,
+            $emailDestinataire,
             null,
-            $this->module->getMailSenderAddress(),
-            $this->module->getMailSenderName(),
+            $this->mqModule->getMailSenderAddress(),
+            $this->mqModule->getMailSenderName(),
             null,
             null,
-            _PS_ROOT_DIR_ . _MODULE_DIR_ . 'commandesfournisseuradmin/mails/fr',
+            _PS_MODULE_DIR_ . 'mqcommandefournisseur/mails/',
             false,
-            null,
-            'service-client@monsterquad.fr', // en dur, ça fait l'affaire ici.
-            $this->module->getMailSenderAddress()
+            (int)Context::getContext()->shop->id
         );
     }
-}
+
+    public function ajaxProcessSendSupplierRequests()
+    {
+        $response = ['success' => false, 'message' => ''];
+        
+        try {
+            if (!$this->tabAccess['edit']) {
+                throw new Exception('Accès refusé');
+            }
+            
+            $orderReference = Tools::getValue('order_reference');
+            $selectedProductsJson = Tools::getValue('selected_products');
+            
+            if (empty($orderReference) || empty($selectedProductsJson)) {
+                throw new Exception('Données manquantes');
+            }
+            
+            $selectedProducts = json_decode($selectedProductsJson, true);
+            if (!is_array($selectedProducts) || empty($selectedProducts)) {
+                throw new Exception('Aucun produit sélectionné');
+            }
+            
+            // Récupérer le module
+            $module = Module::getInstanceByName('mqcommandefournisseur');
+            if (!$module || !$module->active) {
+                throw new Exception('Module non disponible');
+            }
+            
+            // Générer le contenu des emails par fournisseur
+            $emailsData = $module->getEmailContent($selectedProducts, $orderReference);
+            
+            if (empty($emailsData)) {
+                throw new Exception('Aucun fournisseur trouvé pour les produits sélectionnés');
+            }
+            
+            $sentCount = 0;
+            $errors = [];
+            
+            foreach ($emailsData as $supplierData) {
+                try {
+                    $supplier = $supplierData['supplier'];
+                    $products = $supplierData['products'];
+                    
+                    if (empty($supplier['email'])) {
+                        $errors[] = "Pas d'email pour le fournisseur " . ($supplier['name'] ?? 'Inconnu');
+                        continue;
+                    }
+                    
+                    $subject = "Demande de délai - Commande $orderReference";
+                    $emailContent = $this->generateEmailContent($products, $orderReference, $supplier);
+                    
+                    // Envoi de l'email
+                    $sent = Mail::Send(
+                        (int)Context::getContext()->language->id,
+                        'supplier_request',
+                        $subject,
+                        [
+                            'supplier_name' => $supplier['name'],
+                            'order_reference' => $orderReference,
+                            'products' => $products,
+                            'shop_name' => Configuration::get('PS_SHOP_NAME')
+                        ],
+                        $supplier['email'],
+                        $supplier['name'],
+                        $module->getMailSenderAddress(),
+                        $module->getMailSenderName(),
+                        null,
+                        null,
+                        dirname(__FILE__) . '/../../mails/',
+                        false
+                    );
+                    
+                    if ($sent) {
+                        $sentCount++;
+                        // Enregistrer l'historique
+                        $module->recordSupplierRequest($supplier['id_supplier'], $products);
+                    } else {
+                        $errors[] = "Échec d'envoi pour " . $supplier['name'];
+                    }
+                    
+                } catch (Exception $e) {
+                    $errors[] = "Erreur pour fournisseur: " . $e->getMessage();
+                }
+            }
+            
+            if ($sentCount > 0) {
+                $message = "$sentCount demande(s) envoyée(s) avec succès";
+                if (!empty($errors)) {
+                    $message .= ". Erreurs: " . implode(', ', $errors);
+                }
+                $response = ['success' => true, 'message' => $message];
+            } else {
+                $response = ['success' => false, 'message' => 'Aucun email envoyé. Erreurs: ' . implode(', ', $errors)];
+            }
+            
+        } catch (Exception $e) {
+            $response = ['success' => false, 'message' => $e->getMessage()];
+        }
+        
+        header('Content-Type: application/json');
+        echo json_encode($response);
+        exit;
+    }
+    
+    private function generateEmailContent($products, $orderReference, $supplier)
+    {
+        $content = "Bonjour " . ($supplier['name'] ?? '') . ",\n\n";
+        $content .= "Nous vous demandons de nous confirmer le délai de livraison pour les produits suivants de la commande $orderReference :\n\n";
+        
+        foreach ($products as $product) {
+            $content .= "- " . ($product['name'] ?? 'Produit') . " (Réf: " . ($product['reference'] ?? '') . ")\n";
+        }
+        
+        $content .= "\nMerci de nous faire un retour rapide.\n\n";
+        $content .= "Cordialement,\n";
+        $content .= Configuration::get('PS_SHOP_NAME');
+        
+        return $content;
+    }
+} 

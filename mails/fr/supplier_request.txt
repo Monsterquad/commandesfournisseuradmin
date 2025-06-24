@@ -1,0 +1,23 @@
+DEMANDE DE DÉLAI DE LIVRAISON
+=============================
+
+Commande : {order_reference}
+
+Bonjour {supplier_name},
+
+Nous vous contactons concernant une commande pour laquelle nous aurions besoin de connaître les délais de livraison des produits suivants :
+
+{products_list}
+
+Merci de bien vouloir nous communiquer vos délais de livraison dans les plus brefs délais.
+
+Nous restons à votre disposition pour toute information complémentaire.
+
+Cordialement,
+L'équipe {shop_name}
+
+---
+{shop_name}
+Email: {shop_email}
+
+Ce message a été envoyé automatiquement depuis notre système de gestion des commandes. 
