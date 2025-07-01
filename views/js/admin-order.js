@@ -3,13 +3,10 @@ var config = null
 
 $(document).ready(function() {
     config = window.moduleConfig
-    setTimeout(function() {
-        commandeRef = config.orderId
-        // console.log(config)
-        addButtonModal();
-        addHeaderTabField();
-        addCheckbox();
-    }, 500);
+    commandeRef = config.orderId
+    addButtonModal();
+    addHeaderTabField();
+    addCheckbox();
 });
 
 const referenceChecked = new Set();

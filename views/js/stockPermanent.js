@@ -1,7 +1,6 @@
 
 $(document).ready(function() {
     console.log(config)
-    setTimeout(2000)
     addHeaderTabFieldSp()
 })
 
