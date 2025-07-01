@@ -1,3 +1,0 @@
-<?php
-// Copie du fichier de traduction fr.php
-// ... contenu copié ... 

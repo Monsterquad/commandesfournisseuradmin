@@ -1,0 +1,17 @@
+<h2>
+    Stock Permanent
+    <span class="help-box" data-toggle="popover"
+          data-content="{{ "Doit rester en stock chez MonsterQuad" }}" ></span>
+</h2>
+
+<div class="form-group">
+    <div class="md-checkbox">
+        <label>
+            <input type="checkbox" name="mq_stockpermanent_state" {% if state == 1 %}checked{% endif %} value="1" />
+            <i class="md-checkbox-control"></i>
+            Stock permanent
+        </label>
+    </div>
+</div>
+
+<input type="hidden" name="mq_stockpermanent_id_product" value="{{ id_product }}" />
