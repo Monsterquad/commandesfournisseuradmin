@@ -178,7 +178,7 @@ class Mqcommandefournisseuradmin extends Module
     {
         // TODO: mettre les vrai email des fournisseur
         $suppliers = [
-            'MonsterQuad' => 'service-clieeddijnfierbfnt@monsterquad.fr',
+            'MonsterQuad' => 'service-client@monsterquad.fr',
             'Deltamics' => 'contact@deltamics.fr',
             'GDFrance' => 'commande@gdfrance.com',
         ];

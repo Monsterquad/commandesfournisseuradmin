@@ -1,7 +1,6 @@
 var config = null
 $(document).ready(function(){
     config = window.moduleConfig
-    console.log(config)
     const $rows = $(document).find('.table.product > tbody > tr')
     $rows.each(function(){
         const $row = $(this)
@@ -17,7 +16,6 @@ $(document).ready(function(){
                        style="width: 70px; text-align: center; border: 1px solid #ddd;">
             </div>
         `);
-        console.log([product_stock, product_id])
     })
     bindQuantityEditEvents()
 })
