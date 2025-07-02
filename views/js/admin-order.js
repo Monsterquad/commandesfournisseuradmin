@@ -3,10 +3,13 @@ var config = null
 
 $(document).ready(function() {
     config = window.moduleConfig
-    commandeRef = config.orderId
-    addButtonModal();
-    addHeaderTabField();
-    addCheckbox();
+    setTimeout(function() {
+        commandeRef = config.orderId
+        // console.log(config)
+        addHeaderTabField();
+        addCheckbox();
+        addButtonModal();
+    }, 500);
 });
 
 const referenceChecked = new Set();
@@ -17,7 +20,6 @@ function addCheckbox() {
         const $row = $(this);
 
         const $editBtn = $row.find('.js-order-product-edit-btn');
-        const productId = $editBtn.data('product-id');
         const orderDetailId = $editBtn.data('order-detail-id');
 
         const $refElement = $row.find('p.mb-0.productReference');
@@ -26,7 +28,7 @@ function addCheckbox() {
             .replace(/\s+/g, ' ')
             .trim();
 
-        const delay = getProductDelay(referenceText, config.orderProducts)
+        const [delay, productId] = getProductDelay(referenceText, config.orderProducts)
 
         const nameElement = $row.find('p.mb-0.productName').text()
 
@@ -111,7 +113,9 @@ function addCheckbox() {
 
 function getProductDelay(reference, productsList) {
     const product = productsList.find(item => item.reference === reference);
-    return product.date_available
+    if (product){
+        return [product.date_available, product.product_id]
+    }
 }
 
 function addHeaderTabField() {
